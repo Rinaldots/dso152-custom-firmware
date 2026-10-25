@@ -17,8 +17,10 @@ ao PC por USB CDC e um plotter ao vivo em Python.
   O firmware mantém o SWD vivo de propósito.
 - O **bootloader** "DSO BOOT" (`0x08000000`–`0x08003BFF`) **não deve ser
   apagado**. O app vive a partir de `0x08003C00`.
-- Para **voltar ao original**, arraste
-  [`firmware_original/DSO152_APP_V0.1.bin`](firmware_original/) no drive DSO BOOT.
+- Para **voltar ao original**, arraste o `DSO152_APP_V0.1.bin` oficial no
+  drive DSO BOOT. Ele **não está neste repositório** (é da FNIRSI): baixe do
+  site da FNIRSI e guarde em `firmware_original/`, pasta que o `.gitignore`
+  deixa fora do git.
 - O DSO BOOT **aceita um .bin próprio**: o "hello" (888 bytes, `dso152_app.bin`)
   gravou e rodou, então ele não exige o tamanho nem o nome do oficial.
 - Ainda **não está confirmado** se a flash total é 64 KB ou 128 KB (o linker usa
@@ -50,9 +52,9 @@ dso152-hack/
 │   ├── view.c              grade, forma de onda com trigger, frequência e textos
 │   ├── zerocal.c           auto-calibração do zero (mede e grava na flash)
 │   └── main.c              captura em blocos, tela, frames para o PC, comandos, botões
-├── firmware_original/      .bin oficial (referência / restauração)
+├── firmware_original/      .bin oficial, só na cópia local (fora do git)
 ├── tools/                  scripts de análise do .bin (capstone)
-├── docs/                   manual do DSO152
+├── docs/                   manual do DSO152, só na cópia local (fora do git)
 └── pc/
     ├── plot.py             plotter serial ao vivo, em volts (pyserial + matplotlib)
     ├── calibrate.py        mede as 11 faixas pelo borne de calibração
@@ -131,8 +133,8 @@ boa para o primeiro teste: ligue a ponta de prova nele.
 por **3 s** (apaga o backlight e solta o PC10). Alternativa: segure **OK** e
 aperte o **furo de reset** para cair no DSO BOOT.
 
-Deu errado? Recupere pela SWD com o WCH-Link/ST-Link, ou regrave o
-`firmware_original/DSO152_APP_V0.1.bin` pelo DSO BOOT.
+Deu errado? Recupere pela SWD com o WCH-Link/ST-Link, ou regrave o firmware
+oficial (`DSO152_APP_V0.1.bin`, do site da FNIRSI) pelo DSO BOOT.
 
 ## Plotter no PC
 
@@ -196,6 +198,9 @@ dão ~99 contagens por divisão, como no projeto do original, menos a de 2 V/div
 mais sensíveis não dá para medir com a quadrada (satura) e usa o de DC.
 
 ## Ferramentas de análise (`tools/`)
+
+Trabalham sobre o firmware oficial, que não vem no repositório: coloque o
+`DSO152_APP_V0.1.bin` em `firmware_original/`.
 
 ```bash
 pip install capstone

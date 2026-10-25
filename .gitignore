@@ -19,5 +19,7 @@ venv/
 .DS_Store
 Thumbs.db
 
-# NAO ignorar o firmware original (e referencia importante):
-!firmware_original/*.bin
+# Arquivos da FNIRSI (firmware e manual originais): ficam so na copia local,
+# nao vao para o repositorio.
+/firmware_original/
+/docs/*.pdf
