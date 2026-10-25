@@ -45,7 +45,7 @@ static const unsigned char GAIN_TABLE[11][4] __attribute__((unused)) = {
     {1,0,0,0}, {1,1,0,0}, {1,0,1,0}, {1,1,1,0}, {1,0,0,1}, {1,1,0,1},
 };
 
-#define COUPLING_PIN        GPIO_Pin_3    /* PA3   AC/DC (segue flag)        [P] */
+#define COUPLING_PIN        GPIO_Pin_3    /* PA3   AC/DC: 1 = DC, 0 = AC [C], medido no aparelho */
 #define CAL_OUT_PIN         GPIO_Pin_0    /* PA0   borne de calibração 1 kHz, PWM TIM2_CH1 [C][G] */
 
 /* ---------- Energia ---------- */
@@ -65,8 +65,9 @@ static const unsigned char GAIN_TABLE[11][4] __attribute__((unused)) = {
  *   PA9 3/0x1E, PA10 4/0x28, PC8 5/0x32, PC11 6/0x3C, PC3 7/0x46,
  *   PC5 8/0x50, PC4 9/0x5A
  * Segundo o código do Atlan [A]: AUTO = PC8, MODE = PC7, CIMA = PC6,
- * BAIXO = PA9, RUN = PA10. A roda fica em PC3/PC4/PC5 (OK provavelmente no
- * meio, PC4); o lado de cada um ainda precisa ser conferido no aparelho.   */
+ * BAIXO = PA9, RUN = PA10, roda em PC3/PC4/PC5 com OK = PC4. Testados no
+ * aparelho com o firmware novo: CIMA, BAIXO, RUN, OK e os dois lados da
+ * roda. Falta conferir qual lado (PC3/PC5) e esquerda e testar MODE/AUTO. */
 
 /* ---------- Livres / debug ---------- */
 /* PA13 = SWDIO, PA14 = SWCLK (porta de debug)

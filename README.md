@@ -4,10 +4,11 @@ Firmware bare-metal para o osciloscópio de bolso **FNIRSI DSO152** (MCU
 CH32F103, compatível com STM32F103 / Cortex-M3), com envio das amostras do ADC
 ao PC por USB CDC e um plotter ao vivo em Python.
 
-> Projeto de engenharia reversa e firmware sobre hardware próprio. Veja
-> [`CLAUDE.md`](CLAUDE.md) para todo o levantamento de hardware feito a partir
-> do firmware oficial, e [`include/dso152_pins.h`](include/dso152_pins.h) para a
-> pinagem (com marcações `[C]` confirmado / `[P]` provável).
+> Projeto de engenharia reversa e firmware sobre hardware próprio. A pinagem
+> levantada a partir do firmware oficial está em
+> [`include/dso152_pins.h`](include/dso152_pins.h), com a origem de cada
+> informação: `[C]` confirmado no código do original, `[G]`/`[A]` batendo com os
+> projetos do David Given e do Atlan, e o que já foi testado no aparelho.
 
 ## ⚠️ Leia antes de gravar
 
@@ -30,7 +31,6 @@ ao PC por USB CDC e um plotter ao vivo em Python.
 
 ```
 dso152-hack/
-├── CLAUDE.md               levantamento de hardware + roteiro
 ├── Makefile                build do firmware (arm-none-eabi)
 ├── ldscript/dso152_app.ld  linker: FLASH @ 0x08003C00, RAM 20 KB
 ├── include/
@@ -210,11 +210,11 @@ python tools/gpio_direct.py firmware_original/DSO152_APP_V0.1.bin
 python tools/dis.py   firmware_original/DSO152_APP_V0.1.bin 0x080044A4 0x80
 ```
 
-## Roteiro (de `CLAUDE.md`)
+## Roteiro
 
 1. ✅ Projeto: Makefile + linker em `0x08003C00`.
 2. ✅ Firmware "hello": gravação pelo DSO BOOT, backlight (PC9, ativo em 0), power-hold (PC10) e botão POWER (PC11) validados no aparelho.
 3. ✅ Driver do ST7789 e forma de onda na tela junto com o USB: confirmado no aparelho, com V/div calibrado, posição e trigger (nível, borda, AUTO/NORMAL/SINGLE).
 4. ✅ ADC + DMA + TIM1 e envio por USB CDC: testado no aparelho (porta COM + quadrada de 1 kHz no `plot.py`).
-5. ✅/⬜ `pc/plot.py`: comandos e eixo de tempo prontos; falta calibrar `GAIN_VOLTS_PER_DIV`.
-6. ⬜ Mapear botões e confirmar pinos `[P]`.
+5. ✅ `pc/plot.py`: comandos, eixo de tempo e tensão na ponta em volts, com os V/div do original, a escala de `pc/gain_cal.json` e o zero que vem em cada frame. Calibração feita com `pc/calibrate.py` e auto-calibração do zero no aparelho.
+6. ✅ Botões e pinos: roda, CIMA/BAIXO, OK e RUN usados e confirmados no aparelho; AC/DC no PA3 medido (1 = DC). ⬜ Falta só conferir qual lado da roda é qual e testar MODE e AUTO explicitamente.

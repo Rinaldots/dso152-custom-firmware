@@ -19,6 +19,9 @@ venv/
 .DS_Store
 Thumbs.db
 
+# Notas locais do projeto (levantamento de hardware e roteiro): so na copia local.
+/CLAUDE.md
+
 # Arquivos da FNIRSI (firmware e manual originais): ficam so na copia local,
 # nao vao para o repositorio.
 /firmware_original/

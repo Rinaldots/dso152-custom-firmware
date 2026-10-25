@@ -5,7 +5,7 @@ plot.py - plotter ao vivo das amostras enviadas pelo firmware do DSO152.
 Le a porta serial virtual (USB CDC) criada pelo firmware novo, decodifica os
 frames binarios e plota a forma de onda em tempo real.
 
-Protocolo de frame (little-endian), conforme CLAUDE.md:
+Protocolo de frame (little-endian), igual ao do firmware (src/main.c):
 
     offset  campo         tipo    descricao
     0       sync          u8[2]   0xA5 0x5A
