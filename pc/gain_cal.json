@@ -1,0 +1,108 @@
+{
+  "date": "2026-10-25T19:19:39",
+  "source": "medido",
+  "vcal": 3.3,
+  "dc_level": 1,
+  "coupling_check": {
+    "C0": {
+      "low": 2019.6397194290664,
+      "high": 2151.613302466575,
+      "mean": 2085.0250651041665
+    },
+    "C1": {
+      "low": 2085.944799317622,
+      "high": 2217.136757418167,
+      "mean": 2151.3914388020835
+    }
+  },
+  "ranges": [
+    {
+      "gain": 0,
+      "vdiv": 0.01,
+      "offset_dc": 2451.5,
+      "offset_ac": 2451.5,
+      "cpv": 8683.752,
+      "derived": "zeroAC=DC cpv=rele"
+    },
+    {
+      "gain": 1,
+      "vdiv": 0.02,
+      "offset_dc": 2297.7,
+      "offset_ac": 2297.7,
+      "cpv": 4344.488,
+      "derived": "zeroAC=DC cpv=rele"
+    },
+    {
+      "gain": 2,
+      "vdiv": 0.05,
+      "offset_dc": 2170.4,
+      "offset_ac": 2170.4,
+      "cpv": 1734.479,
+      "derived": "zeroAC=DC cpv=rele"
+    },
+    {
+      "gain": 3,
+      "vdiv": 0.1,
+      "offset_dc": 2129.4,
+      "offset_ac": 2050.0,
+      "cpv": 865.887,
+      "derived": "cpv=rele"
+    },
+    {
+      "gain": 4,
+      "vdiv": 0.2,
+      "offset_dc": 2108.0,
+      "offset_ac": 2083.8,
+      "cpv": 429.515,
+      "derived": ""
+    },
+    {
+      "gain": 5,
+      "vdiv": 0.5,
+      "offset_dc": 2097.3,
+      "offset_ac": 2090.1,
+      "cpv": 198.906,
+      "derived": ""
+    },
+    {
+      "gain": 6,
+      "vdiv": 1.0,
+      "offset_dc": 2090.1,
+      "offset_ac": 2092.1,
+      "cpv": 99.513,
+      "derived": ""
+    },
+    {
+      "gain": 7,
+      "vdiv": 2.0,
+      "offset_dc": 2086.0,
+      "offset_ac": 2086.4,
+      "cpv": 39.729,
+      "derived": ""
+    },
+    {
+      "gain": 8,
+      "vdiv": 5.0,
+      "offset_dc": 2084.9,
+      "offset_ac": 2082.9,
+      "cpv": 19.834,
+      "derived": ""
+    },
+    {
+      "gain": 9,
+      "vdiv": 10.0,
+      "offset_dc": 2084.5,
+      "offset_ac": 2084.6,
+      "cpv": 9.838,
+      "derived": ""
+    },
+    {
+      "gain": 10,
+      "vdiv": 20.0,
+      "offset_dc": 2084.4,
+      "offset_ac": 2083.1,
+      "cpv": 4.927,
+      "derived": ""
+    }
+  ]
+}

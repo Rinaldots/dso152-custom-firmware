@@ -1,0 +1,23 @@
+# build do firmware
+/build/
+*.elf
+*.bin.tmp
+*.map
+*.lst
+*.o
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# editores / SO
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# NAO ignorar o firmware original (e referencia importante):
+!firmware_original/*.bin
