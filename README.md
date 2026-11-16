@@ -56,6 +56,8 @@ dso152-hack/
 ├── tools/                  scripts de análise do .bin (capstone)
 ├── docs/                   manual do DSO152, só na cópia local (fora do git)
 └── pc/
+    ├── dso152.html         interface no navegador: ao vivo + fotos para relatório
+    ├── abrir_dso152.bat    abre o dso152.html no Edge (dois cliques)
     ├── plot.py             plotter serial ao vivo, em volts (pyserial + matplotlib)
     ├── calibrate.py        mede as 11 faixas pelo borne de calibração
     └── gain_cal.json       resultado da calibração (usado pelo plot.py)
@@ -135,6 +137,30 @@ aperte o **furo de reset** para cair no DSO BOOT.
 
 Deu errado? Recupere pela SWD com o WCH-Link/ST-Link, ou regrave o firmware
 oficial (`DSO152_APP_V0.1.bin`, do site da FNIRSI) pelo DSO BOOT.
+
+## Fotos para relatório (no navegador)
+
+Dê dois cliques em **`pc/abrir_dso152.bat`** (ou abra `pc/dso152.html` no
+Chrome ou no Edge; o Firefox não tem Web Serial). Não precisa instalar nada.
+
+1. **🔌 Conectar** e escolha o DSO152 (só ele aparece na lista). Nas próximas
+   vezes a página conecta sozinha. Feche o `plot.py` antes, porque a porta só
+   abre em um programa por vez.
+2. Ajuste V/div, t/div e AC/DC pela página ou pelos botões do aparelho. O
+   trigger, a posição e a ponta (1X/10X) são da página.
+3. Preencha o **título** e, se quiser, a **observação**.
+4. **📷 Salvar foto**: baixa um PNG de 1600×1040 com título, data, escalas,
+   eixos em volts e em tempo e a tabela de medidas (Vpp, Vmáx/Vmín, média, RMS,
+   frequência, período e ciclo ativo). O fundo branco é o melhor para impressão.
+5. **📋 Copiar imagem** põe a mesma foto na área de transferência: é só colar no
+   Word ou no Docs. **📄 Salvar CSV** exporta os dados (separador `;` e vírgula
+   decimal, abre direto no Excel).
+
+Atalhos: `P` foto, `C` copiar, `Espaço` parar/rodar. As fotos da sessão ficam
+na lateral, e um clique baixa de novo. O botão **Demo** gera uma quadrada de
+teste sem precisar do aparelho. A escala de cada faixa vem embutida (medida
+em 2026-10-25); se você calibrar de novo, carregue o `pc/gain_cal.json` pelo
+link "Carregar gain_cal.json".
 
 ## Plotter no PC
 

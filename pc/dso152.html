@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSO152 — Captura</title>
+<!--
+  Interface de captura do DSO152 para relatórios.
+
+  Abra no Chrome ou no Edge (precisam da Web Serial; o Firefox não tem) ou
+  rode pc/abrir_dso152.bat. Conecta direto na porta USB do osciloscópio
+  (VID/PID 1209:0001), mostra a forma de onda ao vivo e salva fotos prontas
+  para relatório (PNG com título, escalas, eixos e medidas), copia a imagem
+  para colar no Word/Docs e exporta CSV.
+
+  Lê os mesmos frames do firmware que o pc/plot.py:
+    A5 5A | n (u16) | faixa (u8, bit 7 = AC) | taxa (u32) | zero (i16) | amostras u16[n] | crc8
+  A escala (contagens por volt) vem de pc/gain_cal.json; os valores medidos
+  em 2026-10-25 estão embutidos abaixo e dá para carregar outro arquivo pela
+  própria página.
+-->
+<style>
+  :root {
+    --bg: #111418; --panel: #1a1f26; --panel2: #222932; --text: #e8ecf1; --muted: #9aa5b1;
+    --accent: #ffd400; --accent2: #3aa0ff; --ok: #3ccf6e; --warn: #ffb020; --bad: #ff5a5a;
+    --border: #2d3540;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.4 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 18px; margin: 0 12px 0 0; font-weight: 600; }
+  header h1 span { color: var(--accent); }
+  #status { margin-left: auto; color: var(--muted); font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  #status .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  #status.ok .dot { background: var(--ok); } #status.demo .dot { background: var(--accent2); }
+  #status.bad .dot { background: var(--bad); }
+  button, select, input[type=text], textarea {
+    font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 12px; }
+  button { cursor: pointer; font-weight: 600; }
+  button:hover { border-color: var(--muted); }
+  button.big { font-size: 17px; padding: 12px 14px; width: 100%; }
+  button.primary { background: var(--accent); color: #111; border-color: var(--accent); }
+  button.blue { background: var(--accent2); color: #fff; border-color: var(--accent2); }
+  button.stopped { background: var(--bad); border-color: var(--bad); color: #fff; }
+  #banner { display: none; background: #4a2a00; color: #ffd9a0; padding: 8px 16px; font-size: 14px; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 14px; padding: 14px 16px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .scope { background: #000; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  #live { display: block; width: 100%; aspect-ratio: 1.42; }
+  #warn { color: var(--warn); font-size: 14px; min-height: 20px; margin-top: 6px; }
+  aside { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    margin: 0 0 10px; font-weight: 600; }
+  .row { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .row label { color: var(--muted); font-size: 14px; }
+  .row select, .row input { width: 100%; }
+  .row:last-child { margin-bottom: 0; }
+  table.meas { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  table.meas td { padding: 3px 0; } table.meas td:last-child { text-align: right; font-weight: 600; }
+  table.meas td:first-child { color: var(--muted); }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  textarea { width: 100%; resize: vertical; min-height: 40px; }
+  #gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  #gallery figure { margin: 0; cursor: pointer; }
+  #gallery img { width: 100%; display: block; border-radius: 4px; border: 1px solid var(--border); }
+  #gallery figcaption { font-size: 11px; color: var(--muted); text-align: center; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  kbd { background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; font-size: 12px; }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ok);
+    color: #062; font-weight: 600; padding: 10px 18px; border-radius: 10px; opacity: 0; transition: opacity .25s;
+    pointer-events: none; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DSO152 <span>·</span> captura para relatórios</h1>
+  <button id="btnConnect" class="blue">🔌 Conectar</button>
+  <button id="btnDemo">Demo</button>
+  <button id="btnRun">⏸ Parar</button>
+  <div id="status"><span class="dot"></span><span id="statusText">Desconectado</span></div>
+</header>
+<div id="banner">Este navegador não tem Web Serial. Abra esta página no <b>Chrome</b> ou no <b>Edge</b>
+  (ou rode <code>pc/abrir_dso152.bat</code>). O modo Demo funciona mesmo assim.</div>
+
+<main>
+  <section>
+    <div class="scope"><canvas id="live"></canvas></div>
+    <div id="warn"></div>
+  </section>
+
+  <aside>
+    <div class="card">
+      <h2>📷 Foto para o relatório</h2>
+      <div class="row"><label for="inTitle">Título</label><input id="inTitle" type="text" placeholder="Ex.: Quadrada de calibração, 1 kHz"></div>
+      <div class="row"><label for="inNote">Observação</label><textarea id="inNote" rows="2" placeholder="Opcional: aparece no rodapé da foto"></textarea></div>
+      <div class="row"><label for="selTheme">Fundo</label>
+        <select id="selTheme"><option value="claro">Branco (impressão)</option><option value="escuro">Preto (como a tela)</option></select></div>
+      <button id="btnPhoto" class="big primary">📷 Salvar foto (PNG)</button>
+      <div class="btns">
+        <button id="btnCopy">📋 Copiar imagem</button>
+        <button id="btnCsv">📄 Salvar CSV</button>
+      </div>
+      <div class="hint">Atalhos: <kbd>P</kbd> foto · <kbd>C</kbd> copiar · <kbd>Espaço</kbd> parar/rodar</div>
+    </div>
+
+    <div class="card">
+      <h2>Medidas</h2>
+      <table class="meas">
+        <tr><td>Vpp</td><td id="mVpp">—</td></tr>
+        <tr><td>Vmáx / Vmín</td><td id="mMax">—</td></tr>
+        <tr><td>Média</td><td id="mMean">—</td></tr>
+        <tr><td>RMS</td><td id="mRms">—</td></tr>
+        <tr><td>Frequência</td><td id="mFreq">—</td></tr>
+        <tr><td>Período</td><td id="mPer">—</td></tr>
+        <tr><td>Ciclo ativo</td><td id="mDuty">—</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Escalas</h2>
+      <div class="row"><label for="selVdiv">V/div</label><select id="selVdiv"></select></div>
+      <div class="row"><label for="selTdiv">t/div</label><select id="selTdiv"></select></div>
+      <div class="row"><label for="selCpl">Acoplamento</label>
+        <select id="selCpl"><option value="dc">DC</option><option value="ac">AC</option></select></div>
+      <div class="row"><label for="selTrig">Trigger</label>
+        <select id="selTrig"><option value="sobe">Borda de subida</option><option value="desce">Borda de descida</option><option value="livre">Livre (sem trigger)</option></select></div>
+      <div class="row"><label for="rngPos">Posição</label><input id="rngPos" type="range" min="-4" max="4" step="0.1" value="0"></div>
+      <div class="row"><label for="selProbe">Ponta</label>
+        <select id="selProbe"><option value="1">1X</option><option value="10">10X</option></select></div>
+      <div class="hint">V/div, t/div e acoplamento também mudam no aparelho.
+        <label style="cursor:pointer;text-decoration:underline">Carregar gain_cal.json<input id="fileCal" type="file" accept=".json" hidden></label></div>
+    </div>
+
+    <div class="card">
+      <h2>Fotos desta sessão</h2>
+      <div id="gallery"><span class="hint">As fotos salvas aparecem aqui; clique para baixar de novo.</span></div>
+    </div>
+  </aside>
+</main>
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+/* ------------------------------ constantes ------------------------------ */
+const VDIV = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20];   // faixas do original (ponta 1X)
+// contagens por volt de cada faixa, de pc/gain_cal.json (medido em 2026-10-25)
+const CPV_MEDIDO = [8683.752, 4344.488, 1734.479, 865.887, 429.515, 198.906, 99.513, 39.729, 19.834, 9.838, 4.927];
+const DC_LEVEL = 1;                       // nível do PA3 que dá DC (comando C)
+const TDIVS = [50e-6, 100e-6, 200e-6, 500e-6, 1e-3, 2e-3, 5e-3, 10e-3, 20e-3, 50e-3, 100e-3];
+const SPD = 25, DIVX = 12, DIVY = 8;      // 25 amostras por divisão, grade 12x8 (como a tela)
+const HDR = 11, N_MAX = 2048;
+
+let CPV = CPV_MEDIDO.slice();
+try { const s = JSON.parse(localStorage.getItem("dso152_cpv") || "null"); if (Array.isArray(s) && s.length === 11) CPV = s; } catch {}
+
+/* ------------------------------ formatação ------------------------------ */
+const nf = (x, d = 3) => Number(x).toLocaleString("pt-BR", { maximumSignificantDigits: d });
+function fmtV(v) {
+  const a = Math.abs(v);
+  if (a === 0) return "0 V";
+  if (a >= 1) return nf(v) + " V";
+  if (a >= 1e-3) return nf(v * 1e3) + " mV";
+  return nf(v * 1e6) + " µV";
+}
+function fmtT(t) {
+  const a = Math.abs(t);
+  if (a === 0) return "0 s";
+  if (a >= 1) return nf(t) + " s";
+  if (a >= 1e-3) return nf(t * 1e3) + " ms";
+  if (a >= 1e-6) return nf(t * 1e6) + " µs";
+  return nf(t * 1e9) + " ns";
+}
+function fmtF(f) {
+  if (f >= 1e6) return nf(f / 1e6, 4) + " MHz";
+  if (f >= 1e3) return nf(f / 1e3, 4) + " kHz";
+  return nf(f, 4) + " Hz";
+}
+const stamp = d => d.toLocaleString("pt-BR");
+const fileStamp = d => d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0")
+  + "_" + String(d.getHours()).padStart(2, "0") + String(d.getMinutes()).padStart(2, "0") + String(d.getSeconds()).padStart(2, "0");
+const slug = s => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40);
+
+/* ------------------------------ frames ------------------------------ */
+const CRC = (() => { const t = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) { let c = i; for (let k = 0; k < 8; k++) c = (c & 0x80) ? ((c << 1) ^ 0x07) & 0xFF : (c << 1) & 0xFF; t[i] = c; }
+  return t; })();
+function crc8(b, from, to) { let c = 0; for (let i = from; i < to; i++) c = CRC[c ^ b[i]]; return c; }
+
+class FrameParser {
+  constructor() { this.buf = new Uint8Array(0); }
+  feed(chunk) {
+    const nb = new Uint8Array(this.buf.length + chunk.length);
+    nb.set(this.buf); nb.set(chunk, this.buf.length);
+    let b = nb, p = 0;
+    const out = [];
+    for (;;) {
+      let i = p;
+      while (i + 1 < b.length && !(b[i] === 0xA5 && b[i + 1] === 0x5A)) i++;
+      if (i + 1 >= b.length) { p = Math.max(p, b.length - 1); break; }   // guarda meio-sync
+      p = i;
+      if (b.length - p < HDR) break;                                        // cabeçalho incompleto
+      const n = b[p + 2] | (b[p + 3] << 8);
+      if (n > N_MAX) { p += 1; continue; }                                  // sync falso
+      const total = HDR + 2 * n + 1;
+      if (b.length - p < total) break;                                      // espera o resto
+      if (crc8(b, p + 2, p + total - 1) !== b[p + total - 1]) { p += 1; continue; }
+      const dv = new DataView(b.buffer, b.byteOffset + p, total);
+      const samples = new Uint16Array(n);
+      for (let k = 0; k < n; k++) samples[k] = dv.getUint16(HDR + 2 * k, true);
+      out.push({ gain: Math.min(b[p + 4] & 0x7F, 10), ac: b[p + 4] >> 7, rate: dv.getUint32(5, true),
+                 zero: dv.getInt16(9, true), samples });
+      p += total;
+    }
+    this.buf = b.slice(p);
+    return out;
+  }
+}
+
+/* ------------------------------ análise ------------------------------ */
+function analyze(f, probe, trigMode) {
+  const cpv = CPV[f.gain] || 100 / VDIV[f.gain];
+  const n = f.samples.length, v = new Float32Array(n);
+  let lo = Infinity, hi = -Infinity, sat = false;
+  for (let i = 0; i < n; i++) {
+    const s = f.samples[i];
+    if (s >= 3790 || s <= 300) sat = true;                 // op-amp do front-end satura em ~3805
+    const x = (s - f.zero) / cpv * probe;
+    v[i] = x; if (x < lo) lo = x; if (x > hi) hi = x;
+  }
+  const mid = (lo + hi) / 2, hy = (hi - lo) / 8;
+  const rises = [], falls = [];
+  if ((hi - lo) * cpv / probe > 6) {                       // mais que ~6 contagens: tem sinal
+    let high = v[0] > mid;
+    for (let i = 1; i < n; i++) {
+      if (high) { if (v[i] < mid - hy) { high = false; falls.push(i); } }
+      else if (v[i] > mid + hy) { high = true; rises.push(i); }
+    }
+  }
+  const win = SPD * DIVX;
+  let trig = -1;
+  if (trigMode !== "livre") {
+    for (const i of (trigMode === "desce" ? falls : rises)) {
+      if (i >= SPD && i - SPD + win <= n) { trig = i; break; }
+    }
+  }
+  let a0 = 0, a1 = n;                                       // medidas em períodos inteiros
+  if (rises.length >= 2) { a0 = rises[0]; a1 = rises[rises.length - 1]; }
+  let sum = 0, sq = 0, above = 0;
+  for (let i = a0; i < a1; i++) { sum += v[i]; sq += v[i] * v[i]; if (v[i] > mid) above++; }
+  const cnt = Math.max(1, a1 - a0);
+  const freq = rises.length >= 2 ? (rises.length - 1) * f.rate / (rises[rises.length - 1] - rises[0]) : null;
+  return {
+    f, v, n, lo, hi, mid, sat, trig, start: trig >= 0 ? trig - SPD : 0,
+    mean: sum / cnt, rms: Math.sqrt(sq / cnt), freq, duty: rises.length >= 2 ? above / cnt : null,
+    vdiv: VDIV[f.gain] * probe, tdiv: SPD / f.rate, probe,
+  };
+}
+
+/* ------------------------------ desenho ------------------------------ */
+const THEMES = {
+  escuro: { bg: "#000", plot: "#000", grid: "#3a3a3a", axis: "#777", trace: "#ffd400", text: "#e8e8e8",
+            muted: "#9a9a9a", zero: "#00e0ff", trig: "#ff8c00", panel: "#111", head: "#fff" },
+  claro:  { bg: "#fff", plot: "#fff", grid: "#c9ced6", axis: "#6b7280", trace: "#0b5cd5", text: "#111",
+            muted: "#555", zero: "#0a8f6a", trig: "#e06500", panel: "#f3f5f8", head: "#000" },
+};
+
+function drawScope(ctx, a, L, th, pos) {
+  const { x, y, w, h, font, lw } = L, dx = w / DIVX, dy = h / DIVY;
+  ctx.fillStyle = th.plot; ctx.fillRect(x, y, w, h);
+  ctx.save();
+  ctx.strokeStyle = th.grid; ctx.lineWidth = Math.max(1, lw / 3); ctx.setLineDash([lw * 0.8, lw * 1.6]);
+  ctx.beginPath();
+  for (let i = 1; i < DIVX; i++) { ctx.moveTo(x + i * dx, y); ctx.lineTo(x + i * dx, y + h); }
+  for (let j = 1; j < DIVY; j++) { ctx.moveTo(x, y + j * dy); ctx.lineTo(x + w, y + j * dy); }
+  ctx.stroke(); ctx.setLineDash([]);
+  ctx.strokeStyle = th.axis; ctx.lineWidth = Math.max(1, lw / 2.5); ctx.beginPath();      // eixos centrais com marcas
+  ctx.moveTo(x, y + h / 2); ctx.lineTo(x + w, y + h / 2); ctx.moveTo(x + w / 2, y); ctx.lineTo(x + w / 2, y + h);
+  for (let i = 0; i <= DIVX * 5; i++) { const px = x + i * dx / 5; ctx.moveTo(px, y + h / 2 - 3); ctx.lineTo(px, y + h / 2 + 3); }
+  for (let j = 0; j <= DIVY * 5; j++) { const py = y + j * dy / 5; ctx.moveTo(x + w / 2 - 3, py); ctx.lineTo(x + w / 2 + 3, py); }
+  ctx.stroke();
+  ctx.strokeRect(x, y, w, h);
+  ctx.restore();
+
+  const yOf = volts => y + h / 2 - (volts / (a ? a.vdiv : 1) + pos) * dy;
+  if (a) {
+    ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+    ctx.strokeStyle = th.trace; ctx.lineWidth = lw; ctx.lineJoin = "round"; ctx.beginPath();
+    const count = Math.min(SPD * DIVX, a.n - a.start), sx = w / (SPD * DIVX);
+    for (let k = 0; k < count; k++) {
+      const px = x + k * sx, py = yOf(a.v[a.start + k]);
+      if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke(); ctx.restore();
+  }
+
+  // marcador do 0 V (esquerda) e do nível de trigger (direita)
+  const tri = (px, py, dir, color) => {
+    const s = font * 0.45; ctx.fillStyle = color; ctx.beginPath();
+    ctx.moveTo(px, py); ctx.lineTo(px - dir * s * 1.3, py - s); ctx.lineTo(px - dir * s * 1.3, py + s); ctx.fill();
+  };
+  const clampY = py => Math.min(y + h, Math.max(y, py));
+  tri(x - 2, clampY(yOf(0)), 1, th.zero);
+  if (a && a.trig >= 0) tri(x + w + 2, clampY(yOf(a.mid)), -1, th.trig);
+
+  if (L.labels) {
+    ctx.fillStyle = th.muted; ctx.font = `${font * 0.8}px "Segoe UI", system-ui, sans-serif`;
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    if (a) for (let j = 0; j <= DIVY; j++) ctx.fillText(fmtV((DIVY / 2 - j - pos) * a.vdiv), x - font * 0.9, y + j * dy);
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    const t0 = a && a.trig >= 0 ? 1 : 0;
+    if (a) for (let i = 0; i <= DIVX; i += (L.every || 1)) ctx.fillText(fmtT((i - t0) * a.tdiv), x + i * dx, y + h + font * 0.4);
+  }
+}
+
+function settingsLine(a) {
+  return `${fmtV(a.vdiv)}/div · ${fmtT(a.tdiv)}/div · ${a.f.ac ? "AC" : "DC"} · ponta ${a.probe}X · `
+       + `${nf(a.f.rate, 4)} amostras/s` + (a.trig >= 0 ? ` · trigger na ${trigLabel()}` : " · sem trigger");
+}
+function trigLabel() { return els.selTrig.value === "desce" ? "descida" : "subida"; }
+
+function measRows(a) {
+  return [
+    ["Vpp", fmtV(a.hi - a.lo)],
+    ["Vmáx", fmtV(a.hi)], ["Vmín", fmtV(a.lo)],
+    ["Média", fmtV(a.mean)], ["RMS", fmtV(a.rms)],
+    ["Frequência", a.freq ? fmtF(a.freq) : "—"],
+    ["Período", a.freq ? fmtT(1 / a.freq) : "—"],
+    ["Ciclo ativo", a.duty != null ? nf(a.duty * 100, 3) + " %" : "—"],
+  ];
+}
+
+/* foto: 1600x1040, cabeçalho, grade com eixos e tabela de medidas */
+function renderPhoto(a, themeName, title, note, when) {
+  const th = THEMES[themeName], W = 1600, H = 1040;
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+  const ff = '"Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = th.bg; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = th.head; ctx.font = `600 34px ${ff}`; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+  ctx.fillText(title || "Forma de onda — DSO152", 60, 62);
+  ctx.fillStyle = th.muted; ctx.font = `20px ${ff}`;
+  ctx.fillText(`${stamp(when)}   ·   ${settingsLine(a)}`, 60, 98);
+
+  const P = { x: 150, y: 130, w: 1140, h: 760, font: 22, lw: 3, labels: true };
+  drawScope(ctx, a, P, th, +els.rngPos.value);
+  ctx.fillStyle = th.muted; ctx.font = `20px ${ff}`; ctx.textAlign = "center";
+  ctx.fillText(a.trig >= 0 ? "tempo (0 = trigger)" : "tempo", P.x + P.w / 2, P.y + P.h + 62);
+  ctx.save(); ctx.translate(40, P.y + P.h / 2); ctx.rotate(-Math.PI / 2);
+  ctx.fillText(`tensão na ponta (${a.probe}X)`, 0, 0); ctx.restore();
+
+  // tabela de medidas
+  const mx = 1325, my = 130, mw = 245;
+  ctx.fillStyle = th.panel; ctx.fillRect(mx, my, mw, 420);
+  ctx.fillStyle = th.head; ctx.font = `600 22px ${ff}`; ctx.textAlign = "left";
+  ctx.fillText("Medidas", mx + 18, my + 40);
+  let ry = my + 84;
+  for (const [k, val] of measRows(a)) {
+    ctx.fillStyle = th.muted; ctx.font = `19px ${ff}`; ctx.textAlign = "left"; ctx.fillText(k, mx + 18, ry);
+    ctx.fillStyle = th.text; ctx.font = `600 20px ${ff}`; ctx.textAlign = "right"; ctx.fillText(val, mx + mw - 18, ry);
+    ry += 42;
+  }
+  if (a.sat) {
+    ctx.fillStyle = THEMES.claro.trig; ctx.font = `600 18px ${ff}`; ctx.textAlign = "left";
+    ctx.fillText("⚠ sinal saturado:", mx, my + 460); ctx.fillText("aumente o V/div", mx, my + 484);
+  }
+
+  ctx.textAlign = "left"; ctx.fillStyle = th.text; ctx.font = `20px ${ff}`;
+  if (note) wrapText(ctx, note, 60, 990, 1200, 26);
+  ctx.fillStyle = th.muted; ctx.font = `16px ${ff}`; ctx.textAlign = "right";
+  ctx.fillText("FNIRSI DSO152 · firmware customizado", W - 30, H - 20);
+  return c;
+}
+function wrapText(ctx, text, x, y, maxW, lh) {
+  let line = "";
+  for (const word of text.split(/\s+/)) {
+    const t = line ? line + " " + word : word;
+    if (ctx.measureText(t).width > maxW && line) { ctx.fillText(line, x, y); y += lh; line = word; }
+    else line = t;
+  }
+  if (line) ctx.fillText(line, x, y);
+}
+
+/* ------------------------------ interface ------------------------------ */
+const els = Object.fromEntries([...document.querySelectorAll("[id]")].map(e => [e.id, e]));
+VDIV.forEach((v, i) => els.selVdiv.add(new Option(fmtV(v) + "/div", i)));
+TDIVS.forEach((t, i) => els.selTdiv.add(new Option(fmtT(t) + "/div", i)));
+els.selTdiv.add(new Option("(outro)", "x"));
+
+function pref(k, d) { try { return localStorage.getItem("dso152_" + k) ?? d; } catch { return d; } }
+function savePref(k, v) { try { localStorage.setItem("dso152_" + k, v); } catch {} }
+els.selTheme.value = pref("theme", "claro");
+els.selProbe.value = pref("probe", "1");
+els.selTrig.value = pref("trig", "sobe");
+
+let lastFrame = null, shown = null, analysis = null, running = true, dirty = true;
+let frames = 0, fpsT = performance.now();
+
+function toast(msg, bad) {
+  els.toast.textContent = msg; els.toast.style.background = bad ? "var(--bad)" : "var(--ok)";
+  els.toast.style.color = bad ? "#fff" : "#062"; els.toast.classList.add("show");
+  clearTimeout(toast.t); toast.t = setTimeout(() => els.toast.classList.remove("show"), 1800);
+}
+function setStatus(text, cls) { els.statusText.textContent = text; els.status.className = cls || ""; }
+
+function onFrame(f) { lastFrame = f; frames++; if (running) dirty = true; }
+
+function syncControls(f) {
+  if (document.activeElement !== els.selVdiv) els.selVdiv.value = f.gain;
+  if (document.activeElement !== els.selCpl) els.selCpl.value = f.ac ? "ac" : "dc";
+  if (document.activeElement !== els.selTdiv) {
+    const t = SPD / f.rate, i = TDIVS.findIndex(x => Math.abs(x - t) / x < 0.01);
+    els.selTdiv.value = i >= 0 ? i : "x";
+  }
+}
+
+function updateMeas(a) {
+  const rows = measRows(a);
+  els.mVpp.textContent = rows[0][1];
+  els.mMax.textContent = rows[1][1] + " / " + rows[2][1];
+  els.mMean.textContent = rows[3][1]; els.mRms.textContent = rows[4][1];
+  els.mFreq.textContent = rows[5][1]; els.mPer.textContent = rows[6][1]; els.mDuty.textContent = rows[7][1];
+  els.warn.textContent = a.sat ? "⚠ Sinal saturado no amplificador: aumente o V/div para medir certo." : "";
+}
+
+function drawLive() {
+  const cv = els.live, dpr = window.devicePixelRatio || 1;
+  const W = Math.round(cv.clientWidth * dpr), H = Math.round(cv.clientHeight * dpr);
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  const ctx = cv.getContext("2d"), th = THEMES.escuro;
+  ctx.fillStyle = th.bg; ctx.fillRect(0, 0, W, H);
+  const f = 13 * dpr, L = { x: 64 * dpr, y: 14 * dpr, w: W - 84 * dpr, h: H - 44 * dpr, font: f, lw: 1.6 * dpr,
+                            labels: true, every: W < 700 * dpr ? 2 : 1 };
+  drawScope(ctx, analysis, L, th, +els.rngPos.value);
+  if (analysis) {
+    ctx.fillStyle = "#ffd400"; ctx.font = `600 ${f}px "Segoe UI", system-ui, sans-serif`;
+    ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillText(`${fmtV(analysis.vdiv)}/div   ${fmtT(analysis.tdiv)}/div   ${analysis.f.ac ? "AC" : "DC"}`, L.x + 8 * dpr, L.y + 6 * dpr);
+    if (!running) { ctx.fillStyle = "#ff5a5a"; ctx.textAlign = "right"; ctx.fillText("PARADO", L.x + L.w - 8 * dpr, L.y + 6 * dpr); }
+  } else {
+    ctx.fillStyle = "#9a9a9a"; ctx.font = `${16 * dpr}px "Segoe UI", system-ui, sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("Clique em “Conectar” e escolha o DSO152 (ou use o Demo)", W / 2, H / 2);
+  }
+}
+
+function loop() {
+  const now = performance.now();
+  if (now - fpsT > 1000) {
+    if (port) setStatus(`Conectado · ${Math.round(frames * 1000 / (now - fpsT))} quadros/s`, "ok");
+    else if (demoTimer) setStatus(`Demo · ${Math.round(frames * 1000 / (now - fpsT))} quadros/s`, "demo");
+    frames = 0; fpsT = now;
+  }
+  if (dirty && lastFrame) {
+    if (running) shown = lastFrame;
+    analysis = analyze(shown, +els.selProbe.value, els.selTrig.value);
+    updateMeas(analysis); syncControls(shown); dirty = false; drawLive();
+  } else if (dirty) { drawLive(); dirty = false; }
+  requestAnimationFrame(loop);
+}
+new ResizeObserver(() => { dirty = true; }).observe(els.live);
+
+/* ------------------------------ porta serial ------------------------------ */
+const enc = new TextEncoder();
+const parser = new FrameParser();
+let port = null, reader = null, writer = null, demoTimer = null;
+
+async function send(cmd) {
+  if (demoTimer) { demo.apply(cmd); return; }
+  if (!writer) return;
+  try { await writer.write(enc.encode(cmd + "\n")); } catch { /* porta caiu */ }
+}
+
+async function openPort(p) {
+  stopDemo();
+  setStatus("Conectando…");
+  try {
+    await p.open({ baudRate: 115200, bufferSize: 1 << 16 });
+    try { await p.setSignals({ dataTerminalReady: true, requestToSend: true }); } catch {}
+  } catch (e) { setStatus("Não abriu a porta (feche o plot.py?)", "bad"); return; }
+  port = p; writer = p.writable.getWriter();
+  els.btnConnect.textContent = "Desconectar"; setStatus("Conectado", "ok");
+  try {
+    reader = p.readable.getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) for (const f of parser.feed(value)) onFrame(f);
+    }
+  } catch { /* desconectado */ }
+  await closePort();
+}
+
+async function closePort() {
+  const p = port; port = null;
+  try { reader && await reader.cancel(); } catch {}
+  try { reader && reader.releaseLock(); } catch {}
+  try { writer && writer.releaseLock(); } catch {}
+  try { p && await p.close(); } catch {}
+  reader = writer = null;
+  els.btnConnect.textContent = "🔌 Conectar";
+  if (!demoTimer) setStatus("Desconectado");
+}
+
+els.btnConnect.onclick = async () => {
+  if (port) { await closePort(); return; }
+  if (!("serial" in navigator)) { toast("Use o Chrome ou o Edge", true); return; }
+  try {
+    const p = await navigator.serial.requestPort({ filters: [{ usbVendorId: 0x1209, usbProductId: 0x0001 }] });
+    openPort(p);
+  } catch { /* cancelou a escolha */ }
+};
+
+if ("serial" in navigator) {
+  const isScope = p => { const i = p.getInfo(); return i.usbVendorId === 0x1209 && i.usbProductId === 0x0001; };
+  navigator.serial.getPorts().then(ps => { const p = ps.find(isScope); if (p && !port) openPort(p); });
+  navigator.serial.addEventListener("connect", e => { if (!port && isScope(e.target)) openPort(e.target); });
+  navigator.serial.addEventListener("disconnect", e => { if (e.target === port) closePort(); });
+} else {
+  els.banner.style.display = "block";
+}
+
+/* ------------------------------ demo ------------------------------ */
+// gera frames iguais aos do firmware (passam pelo mesmo parser): quadrada de
+// calibração de 1 kHz, 0 a 3,3 V, com um pouco de ruído e de oscilação na borda
+const demo = {
+  gain: 6, rate: 50000, ac: 0, t: 0,
+  apply(cmd) {
+    const v = +cmd.slice(1);
+    if (cmd[0] === "G") this.gain = Math.max(0, Math.min(10, v));
+    if (cmd[0] === "R") this.rate = Math.max(10, Math.min(800000, v));
+    if (cmd[0] === "C") this.ac = v === DC_LEVEL ? 0 : 1;
+  },
+  frame() {
+    const n = 600, zero = 2090, cpv = CPV[this.gain];
+    const b = new Uint8Array(HDR + 2 * n + 1), dv = new DataView(b.buffer);
+    b[0] = 0xA5; b[1] = 0x5A; dv.setUint16(2, n, true); b[4] = this.gain | (this.ac ? 0x80 : 0);
+    dv.setUint32(5, this.rate, true); dv.setInt16(9, zero, true);
+    for (let k = 0; k < n; k++) {
+      const t = this.t + k / this.rate, ph = (t * 1000) % 1;
+      const edge = ph < 0.5 ? ph : ph - 0.5;
+      let volts = (ph < 0.5 ? 3.3 : 0) + (ph < 0.5 ? -1 : 1) * 0.25 * Math.exp(-edge * 40) * Math.cos(edge * 2 * Math.PI * 9);
+      if (this.ac) volts -= 1.65;
+      volts += (Math.random() - 0.5) * 0.02;
+      const s = Math.max(0, Math.min(3805, Math.round(zero + volts * cpv)));
+      dv.setUint16(HDR + 2 * k, s, true);
+    }
+    b[b.length - 1] = crc8(b, 2, b.length - 1);
+    this.t += 0.0371;
+    return b;
+  },
+};
+function stopDemo() { if (demoTimer) { clearInterval(demoTimer); demoTimer = null; els.btnDemo.textContent = "Demo"; } }
+els.btnDemo.onclick = async () => {
+  if (demoTimer) { stopDemo(); setStatus(port ? "Conectado" : "Desconectado", port ? "ok" : ""); return; }
+  if (port) await closePort();
+  demoTimer = setInterval(() => { for (const f of parser.feed(demo.frame())) onFrame(f); }, 40);
+  els.btnDemo.textContent = "Parar demo"; setStatus("Demo", "demo");
+};
+
+/* ------------------------------ controles ------------------------------ */
+els.selVdiv.onchange = () => send("G" + els.selVdiv.value);
+els.selTdiv.onchange = () => { if (els.selTdiv.value !== "x") send("R" + Math.round(SPD / TDIVS[+els.selTdiv.value])); };
+els.selCpl.onchange = () => send("C" + (els.selCpl.value === "dc" ? DC_LEVEL : 1 - DC_LEVEL));
+els.selTrig.onchange = () => { savePref("trig", els.selTrig.value); dirty = true; };
+els.selProbe.onchange = () => { savePref("probe", els.selProbe.value); dirty = true; };
+els.selTheme.onchange = () => savePref("theme", els.selTheme.value);
+els.rngPos.oninput = () => { dirty = true; };
+els.rngPos.ondblclick = () => { els.rngPos.value = 0; dirty = true; };
+
+function toggleRun() {
+  running = !running; dirty = true;
+  els.btnRun.textContent = running ? "⏸ Parar" : "▶ Rodar";
+  els.btnRun.classList.toggle("stopped", !running);
+}
+els.btnRun.onclick = toggleRun;
+
+els.fileCal.onchange = async () => {
+  const file = els.fileCal.files[0]; if (!file) return;
+  try {
+    const cal = JSON.parse(await file.text()), next = CPV_MEDIDO.slice();
+    for (const r of cal.ranges || []) if (r.cpv) next[r.gain] = r.cpv;
+    CPV = next; savePref("cpv", JSON.stringify(CPV)); dirty = true;
+    toast("Calibração carregada");
+  } catch { toast("Arquivo de calibração inválido", true); }
+  els.fileCal.value = "";
+};
+
+/* ------------------------------ foto / CSV ------------------------------ */
+function baseName(when) {
+  const t = slug(els.inTitle.value);
+  return "dso152_" + fileStamp(when) + (t ? "_" + t : "");
+}
+function download(url, name) {
+  const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+}
+function photoCanvas(when) {
+  if (!analysis) { toast("Ainda não há forma de onda", true); return null; }
+  return renderPhoto(analysis, els.selTheme.value, els.inTitle.value.trim(), els.inNote.value.trim(), when);
+}
+
+function savePhoto() {
+  const when = new Date(), c = photoCanvas(when); if (!c) return;
+  const name = baseName(when) + ".png";
+  c.toBlob(blob => {
+    const url = URL.createObjectURL(blob);
+    download(url, name);
+    addToGallery(url, c, name, els.inTitle.value.trim() || fmtT(analysis.tdiv) + "/div");
+    toast("Foto salva: " + name);
+  }, "image/png");
+}
+
+async function copyPhoto() {
+  const c = photoCanvas(new Date()); if (!c) return;
+  try {
+    const blob = await new Promise(r => c.toBlob(r, "image/png"));
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    toast("Imagem copiada: cole no Word/Docs com Ctrl+V");
+  } catch { toast("O navegador não deixou copiar; use “Salvar foto”", true); }
+}
+
+function saveCsv() {
+  if (!analysis) { toast("Ainda não há forma de onda", true); return; }
+  const a = analysis, when = new Date(), dt = 1 / a.f.rate, t0 = a.trig >= 0 ? a.trig : 0;
+  const num = x => x.toLocaleString("pt-BR", { useGrouping: false, maximumSignificantDigits: 7 });
+  const lines = ["tempo_s;tensao_V"];
+  for (let i = 0; i < a.n; i++) lines.push(num((i - t0) * dt) + ";" + num(a.v[i]));
+  const url = URL.createObjectURL(new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv" }));
+  download(url, baseName(when) + ".csv");
+  toast("CSV salvo (separador ; e vírgula decimal)");
+}
+
+function addToGallery(url, canvas, name, label) {
+  if (!addToGallery.used) { els.gallery.innerHTML = ""; addToGallery.used = true; }
+  const thumb = document.createElement("canvas"); thumb.width = 240; thumb.height = 156;
+  thumb.getContext("2d").drawImage(canvas, 0, 0, 240, 156);
+  const fig = document.createElement("figure");
+  fig.title = name;
+  fig.innerHTML = `<img src="${thumb.toDataURL()}" alt=""><figcaption></figcaption>`;
+  fig.querySelector("figcaption").textContent = label;
+  fig.onclick = () => download(url, name);
+  els.gallery.prepend(fig);
+}
+
+els.btnPhoto.onclick = savePhoto;
+els.btnCopy.onclick = copyPhoto;
+els.btnCsv.onclick = saveCsv;
+document.addEventListener("keydown", e => {
+  if (e.target.matches("input[type=text], textarea") || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "p" || e.key === "P") { e.preventDefault(); savePhoto(); }
+  else if (e.key === "c" || e.key === "C") { e.preventDefault(); copyPhoto(); }
+  else if (e.key === " ") { e.preventDefault(); toggleRun(); }
+});
+
+// para conferir a foto sem baixar (usado nos testes)
+window.__dso152 = { renderPhoto: (theme = "claro") => photoCanvas(new Date()) && renderPhoto(analysis, theme, els.inTitle.value, els.inNote.value, new Date()) };
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
