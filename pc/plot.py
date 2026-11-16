@@ -22,7 +22,9 @@ flash, ou o da calibracao do PC); a escala (contagens por volt) vem de
 pc/gain_cal.json. Mantenha este spec em sincronia com o firmware.
 
 Comandos PC -> firmware (texto, um por linha): G<0..10> faixa, R<hz> taxa,
-N<n> amostras por frame, C<0|1> nivel do PA3 (AC/DC).
+N<n> amostras por frame, C<0|1> nivel do PA3 (AC/DC). Ha outros (trigger,
+posicao, RUN/STOP...), listados no README; o firmware tambem manda quadros de
+estado (A5 5B), que este parser pula porque so procura A5 5A.
 
 Uso:
     python plot.py --list                 # lista as portas seriais

@@ -15,9 +15,20 @@
  *
  * Comandos do PC (texto, um por linha, terminados em \n ou \r):
  *     G<0..10>      faixa de ganho (indice da GAIN_TABLE)
- *     R<hz>         taxa de amostragem (10 .. 800000)
+ *     R<hz>         taxa de amostragem livre (10 .. 800000)
+ *     B<i>          base de tempo da tela (indice de TB_RATE, 0 = 50 us/div)
  *     N<n>          amostras por frame (16 .. 2048)
  *     C<0|1>        nivel do PA3 (1 = DC, 0 = AC)
+ *     T<0|1|2>      trigger AUTO / NORMAL / SINGLE      E<0|1> borda subida/descida
+ *     L<px>         nivel do trigger acima do 0 V (25 px por divisao, com sinal)
+ *     P<px>         posicao do 0 V acima do meio da tela (px, com sinal)
+ *     S<0|1>        parar / rodar (no SINGLE, S1 arma de novo)
+ *     A             trigger no meio do sinal (como o botao AUTO)
+ *     D             tudo no padrao (como o AUTO longo)
+ *     Z             mede e grava os zeros (ponta no jacare!)
+ *     Q             pede o quadro de estado
+ * Depois de cada comando, e sempre que algo muda pelos botoes, o aparelho
+ * manda um quadro de estado (A5 5B, ver status_poll()).
  *
  * Botoes, no estilo do original (pinos do esquema do Atlan):
  *     roda esq. / dir.   escolhe o parametro: V/div, t/div, posicao, trigger
@@ -90,6 +101,7 @@ static int      restart;                      /* refazer a captura com a nova co
 
 enum { CAL_OFF, CAL_ASK, CAL_RUN };           /* pagina de auto-calibracao */
 static int      cal_state;
+static int8_t   cal_result = -1;              /* ultimo zerocal_run(), -1 = nenhum */
 
 static uint8_t crc_table[256];
 
@@ -274,6 +286,7 @@ static void cal_run(uint16_t *buf)
     view_panel_line(3, "na ponta.", C_YELLOW);
 
     int r = zerocal_run(buf, cal_progress, cal_idle);
+    cal_result = (int8_t)r;
     switch (r) {
     case ZC_OK:
         view_panel_line(5, "Pronto: zeros gravados.", C_GREEN);
@@ -300,36 +313,154 @@ static void cal_run(uint16_t *buf)
     cal_exit();
 }
 
+/* ------------------------- estado para o PC ------------------------- */
+/*
+ * Quadro de estado (A5 5B), mandado quando a configuracao muda (pelo PC ou
+ * pelos botoes), depois de um Q e a cada segundo:
+ *     A5 5B | len (u8) | payload[len] | crc8 (de len ate o fim do payload)
+ * payload (little-endian), versao 1:
+ *     0 versao (1)   1 faixa 0..10   2 AC (0/1)   3 modo (0 AUTO, 1 NORMAL, 2 SINGLE)
+ *     4 borda (0 subida, 1 descida)   5 rodando (0/1)   6 esperando trigger (0/1)
+ *     7 calibracao (0 fora, 1 pagina aberta, 2 medindo)   8 zero da flash (0/1)
+ *     9 base de tempo (i8, -1 = taxa livre)   10 trig_px (i16)   12 pos_px (i16)
+ *     14 taxa pedida (u32)   18 taxa real (u32)   22 amostras por quadro (u16)
+ *     24 parametro da roda (u8)   25 ultimo resultado da calibracao (i8, -1 = nenhum)
+ * Os px sao os da tela: 25 px por divisao, entao volts = px * (V/div) / 25.
+ * O pc/plot.py so procura A5 5A e pula este quadro.
+ */
+#define STATUS_LEN 26u
+static uint8_t  status_buf[2u + 1u + STATUS_LEN + 1u];
+static uint8_t  status_last[STATUS_LEN];
+static int      status_force = 1;
+static uint32_t status_ms;
+
+static void status_payload(uint8_t *p)
+{
+    uint32_t real = scope_actual_rate(rate_req);
+    p[0] = 1u;
+    p[1] = (uint8_t)cfg.gain;
+    p[2] = (uint8_t)(cfg.ac != 0);
+    p[3] = (uint8_t)cfg.mode;
+    p[4] = (uint8_t)(cfg.falling != 0);
+    p[5] = (uint8_t)(running != 0);
+    p[6] = (uint8_t)(waiting != 0);
+    p[7] = (uint8_t)cal_state;
+    p[8] = (uint8_t)(zerocal_from_flash() != 0);
+    p[9] = (uint8_t)(int8_t)tb;
+    p[10] = (uint8_t)cfg.trig_px;  p[11] = (uint8_t)((uint16_t)cfg.trig_px >> 8);
+    p[12] = (uint8_t)cfg.pos_px;   p[13] = (uint8_t)((uint16_t)cfg.pos_px >> 8);
+    for (int k = 0; k < 4; k++) {
+        p[14 + k] = (uint8_t)(rate_req >> (8 * k));
+        p[18 + k] = (uint8_t)(real >> (8 * k));
+    }
+    p[22] = (uint8_t)n_samples;    p[23] = (uint8_t)(n_samples >> 8);
+    p[24] = (uint8_t)sel;
+    p[25] = (uint8_t)cal_result;
+}
+
+/* manda o estado se mudou, se foi pedido ou se passou 1 s; so com o USB livre */
+static void status_poll(void)
+{
+    if (!usb_cdc_ready()) { status_force = 1; return; }
+    if (usb_cdc_tx_busy()) return;
+    uint8_t now[STATUS_LEN];
+    status_payload(now);
+    int changed = 0;
+    for (unsigned k = 0; k < STATUS_LEN; k++) {
+        if (now[k] != status_last[k]) changed = 1;
+    }
+    if (!changed && !status_force && (sys_ms() - status_ms) < 1000u) return;
+    for (unsigned k = 0; k < STATUS_LEN; k++) {
+        status_last[k] = now[k];
+        status_buf[3 + k] = now[k];
+    }
+    status_buf[0] = 0xA5;
+    status_buf[1] = 0x5B;
+    status_buf[2] = (uint8_t)STATUS_LEN;
+    status_buf[3 + STATUS_LEN] = crc8(status_buf + 2, 1u + STATUS_LEN);
+    usb_cdc_write(status_buf, sizeof status_buf);
+    status_force = 0;
+    status_ms = sys_ms();
+}
+
 /* ------------------------- comandos do PC ------------------------- */
 static char     line[16];
 static unsigned line_len;
 
+/*
+ * Uma letra e, conforme o comando, um numero com sinal opcional:
+ *     G<0..10> faixa          R<hz> taxa livre        B<i> base de tempo da tela
+ *     N<n> amostras           C<0|1> nivel do PA3     T<0|1|2> modo do trigger
+ *     E<0|1> borda            L<px> nivel do trigger  P<px> posicao do 0 V
+ *     S<0|1> parar / rodar (no SINGLE, S1 arma)       A trigger no meio do sinal
+ *     D tudo no padrao        Q pede o estado         Z mede e grava os zeros
+ */
 static void run_command(void)
 {
-    if (line_len < 2u) return;
-    uint32_t v = 0;
+    if (line_len < 1u) return;
+    int32_t v = 0;
+    int neg = 0, has_num = 0;
     for (unsigned i = 1; i < line_len; i++) {
-        if (line[i] < '0' || line[i] > '9') return;
-        v = v * 10u + (uint32_t)(line[i] - '0');
+        char ch = line[i];
+        if (i == 1u && ch == '-') { neg = 1; continue; }
+        if (ch < '0' || ch > '9') return;
+        if (v < 100000000) v = v * 10 + (ch - '0');
+        has_num = 1;
     }
-    switch (line[0] | 0x20) {                 /* minuscula */
+    if (neg) v = -v;
+    char cmd = (char)(line[0] | 0x20);        /* minuscula */
+    int needs_num = (cmd != 'a' && cmd != 'd' && cmd != 'q' && cmd != 'z');
+    if (needs_num && !has_num) return;
+
+    switch (cmd) {
     case 'g':
-        set_gain(v);
+        if (v >= 0) set_gain((unsigned)v);
         break;
     case 'r':
-        rate_req = v;
-        tb = -1;
-        restart = 1;
+        if (v > 0) { rate_req = (uint32_t)v; tb = -1; restart = 1; }
+        break;
+    case 'b':
+        set_tb(v);
         break;
     case 'n':
-        if (v >= N_MIN && v <= N_MAX) { n_samples = (uint16_t)v; restart = 1; }
+        if (v >= (int32_t)N_MIN && v <= (int32_t)N_MAX) { n_samples = (uint16_t)v; restart = 1; }
         break;
     case 'c':                                 /* nivel cru do PA3 */
-        set_ac((v != 0u) != GAIN_CAL_DC_LEVEL);
+        set_ac((v != 0) != GAIN_CAL_DC_LEVEL);
+        break;
+    case 't':
+        if (v >= TRIG_AUTO && v <= TRIG_SINGLE) { cfg.mode = (int)v; running = 1; restart = 1; }
+        break;
+    case 'e':
+        cfg.falling = (v != 0);
+        break;
+    case 'l':
+        cfg.trig_px = clamp_pos((int)v);
+        break;
+    case 'p':
+        cfg.pos_px = clamp_pos((int)v);
+        if (!running || waiting) view_redraw(&cfg);
+        break;
+    case 's':
+        running = (v != 0);
+        restart = 1;
+        break;
+    case 'a':
+        cfg.trig_px = clamp_pos(view_mid_px());
+        break;
+    case 'd':
+        set_defaults();
+        break;
+    case 'z':                                 /* o PC ja pediu a ponta no jacare */
+        if (cal_state == CAL_OFF) cal_enter();
+        cal_state = CAL_RUN;
+        break;
+    case 'q':
         break;
     default:
-        break;
+        return;
     }
+    status_force = 1;                         /* responde com o estado novo */
 }
 
 static void poll_commands(void)
@@ -535,6 +666,7 @@ int main(void)
                 full = 0;
             }
             view_step();
+            status_poll();
         }
 
         if ((sys_ms() - last_tick) >= TICK_MS) {
