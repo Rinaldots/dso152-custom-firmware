@@ -142,6 +142,9 @@ oficial (`DSO152_APP_V0.1.bin`, do site da FNIRSI) pelo DSO BOOT.
 
 Dê dois cliques em **`pc/abrir_dso152.bat`** (ou abra `pc/dso152.html` no
 Chrome ou no Edge; o Firefox não tem Web Serial). Não precisa instalar nada.
+A mesma página fica online em
+<https://rinaldots.github.io/dso152-custom-firmware/>, publicada pelo
+`.github/workflows/pages.yml` a cada push que mexe nela.
 
 1. **🔌 Conectar** e escolha o DSO152 (só ele aparece na lista). Nas próximas
    vezes a página conecta sozinha. Feche o `plot.py` antes, porque a porta só
