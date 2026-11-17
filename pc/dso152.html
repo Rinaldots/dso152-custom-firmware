@@ -3,86 +3,127 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DSO152 — Captura</title>
+<title>DSO152 — Osciloscópio</title>
 <!--
-  Interface de captura do DSO152 para relatórios.
+  Interface do DSO152 no navegador (Chrome ou Edge, que têm Web Serial; o
+  Firefox não tem). Rode pc/abrir_dso152.bat ou abra este arquivo direto.
 
-  Abra no Chrome ou no Edge (precisam da Web Serial; o Firefox não tem) ou
-  rode pc/abrir_dso152.bat. Conecta direto na porta USB do osciloscópio
-  (VID/PID 1209:0001), mostra a forma de onda ao vivo e salva fotos prontas
-  para relatório (PNG com título, escalas, eixos e medidas), copia a imagem
-  para colar no Word/Docs e exporta CSV.
+  Controla tudo o que os botões do aparelho controlam (V/div, t/div, acoplamento,
+  posição, trigger AUTO/NORMAL/SINGLE, borda, nível, RUN/STOP, padrão e a
+  auto-calibração do zero) e acrescenta, no PC: ajuste automático, medidas
+  completas com estatísticas, cursores, espectro (FFT) com THD, média,
+  persistência, traço de referência, fotos prontas para relatório, CSV.
 
-  Lê os mesmos frames do firmware que o pc/plot.py:
-    A5 5A | n (u16) | faixa (u8, bit 7 = AC) | taxa (u32) | zero (i16) | amostras u16[n] | crc8
-  A escala (contagens por volt) vem de pc/gain_cal.json; os valores medidos
-  em 2026-10-25 estão embutidos abaixo e dá para carregar outro arquivo pela
-  própria página.
+  Protocolo (o mesmo do firmware, ver src/main.c):
+    dados:  A5 5A | n (u16) | faixa (u8, bit 7 = AC) | taxa (u32) | zero (i16) | amostras u16[n] | crc8
+    estado: A5 5B | len (u8) | payload[len] | crc8
+    comandos em texto: G B R N C T E L P S A D Z Q (um por linha)
+  A escala (contagens por volt) vem de pc/gain_cal.json; os valores medidos em
+  2026-10-25 estão embutidos abaixo e dá para carregar outro arquivo.
 -->
 <style>
   :root {
     --bg: #111418; --panel: #1a1f26; --panel2: #222932; --text: #e8ecf1; --muted: #9aa5b1;
     --accent: #ffd400; --accent2: #3aa0ff; --ok: #3ccf6e; --warn: #ffb020; --bad: #ff5a5a;
-    --border: #2d3540;
+    --border: #2d3540; --ref: #ff4fd8; --orange: #ff8c00; --cyan: #00e0ff;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.4 "Segoe UI", system-ui, -apple-system, sans-serif; }
-  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
-  header h1 { font-size: 18px; margin: 0 12px 0 0; font-weight: 600; }
+    font: 14px/1.4 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 17px; margin: 0 10px 0 0; font-weight: 600; }
   header h1 span { color: var(--accent); }
-  #status { margin-left: auto; color: var(--muted); font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  #status { margin-left: auto; color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; }
   #status .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
   #status.ok .dot { background: var(--ok); } #status.demo .dot { background: var(--accent2); }
   #status.bad .dot { background: var(--bad); }
-  button, select, input[type=text], textarea {
+  .badge { font-weight: 700; font-size: 12px; padding: 3px 9px; border-radius: 6px; letter-spacing: .04em; }
+  .badge.run { background: #0f3d22; color: var(--ok); } .badge.wait { background: #4a3600; color: var(--warn); }
+  .badge.stop { background: #4a1414; color: var(--bad); } .badge.off { background: var(--panel2); color: var(--muted); }
+  button, select, input[type=text], input[type=number], textarea {
     font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--border);
-    border-radius: 8px; padding: 7px 12px; }
-  button { cursor: pointer; font-weight: 600; }
-  button:hover { border-color: var(--muted); }
-  button.big { font-size: 17px; padding: 12px 14px; width: 100%; }
+    border-radius: 7px; padding: 6px 10px; }
+  button { cursor: pointer; font-weight: 600; white-space: nowrap; }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.big { font-size: 16px; padding: 10px 12px; width: 100%; }
   button.primary { background: var(--accent); color: #111; border-color: var(--accent); }
   button.blue { background: var(--accent2); color: #fff; border-color: var(--accent2); }
   button.stopped { background: var(--bad); border-color: var(--bad); color: #fff; }
-  #banner { display: none; background: #4a2a00; color: #ffd9a0; padding: 8px 16px; font-size: 14px; }
-  main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 14px; padding: 14px 16px; }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
-  .scope { background: #000; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-  #live { display: block; width: 100%; aspect-ratio: 1.42; }
-  #warn { color: var(--warn); font-size: 14px; min-height: 20px; margin-top: 6px; }
-  aside { display: flex; flex-direction: column; gap: 12px; }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
-  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
-    margin: 0 0 10px; font-weight: 600; }
-  .row { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 8px; margin-bottom: 8px; }
-  .row label { color: var(--muted); font-size: 14px; }
-  .row select, .row input { width: 100%; }
-  .row:last-child { margin-bottom: 0; }
-  table.meas { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  table.meas td { padding: 3px 0; } table.meas td:last-child { text-align: right; font-weight: 600; }
-  table.meas td:first-child { color: var(--muted); }
-  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
-  textarea { width: 100%; resize: vertical; min-height: 40px; }
+  button.on { background: #1d3b5c; border-color: var(--accent2); color: #cfe6ff; }
+  button.small { padding: 4px 8px; font-size: 12px; }
+  #banner { display: none; background: #4a2a00; color: #ffd9a0; padding: 8px 16px; font-size: 13px; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 350px; gap: 12px; padding: 12px 14px; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  .scope { position: relative; background: #000; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  #live { display: block; width: 100%; aspect-ratio: 1.45; touch-action: none; }
+  #fft { display: block; width: 100%; aspect-ratio: 3.2; }
+  #fftBox { display: none; margin-top: 10px; }
+  #warn { color: var(--warn); font-size: 13px; min-height: 18px; margin-top: 6px; }
+  #curBar { display: none; margin-top: 8px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 12px; font-variant-numeric: tabular-nums; }
+  #curBar .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 14px; }
+  #curBar .k { color: var(--muted); font-size: 12px; } #curBar .v { font-weight: 600; }
+  #fftInfo { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 4px 14px; padding: 8px 12px;
+    background: var(--panel); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 10px 10px;
+    font-variant-numeric: tabular-nums; }
+  #fftInfo .k { color: var(--muted); font-size: 12px; } #fftInfo .v { font-weight: 600; }
+  aside { display: flex; flex-direction: column; gap: 10px; }
+  details.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0 12px; }
+  details.card > summary { cursor: pointer; list-style: none; padding: 10px 0; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--muted); font-weight: 700; display: flex; align-items: center; gap: 6px; }
+  details.card > summary::-webkit-details-marker { display: none; }
+  details.card > summary::before { content: "▸"; transition: transform .15s; }
+  details.card[open] > summary::before { transform: rotate(90deg); }
+  details.card > summary .extra { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--text); }
+  details.card > .body { padding-bottom: 12px; }
+  .row { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .row > label:first-child { color: var(--muted); font-size: 13px; }
+  .row select, .row input[type=text], .row input[type=number] { width: 100%; }
+  .row .pair { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; }
+  .row .val { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 64px; text-align: right; font-size: 13px; }
+  input[type=range] { width: 100%; accent-color: var(--accent2); }
+  .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 0; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: var(--panel2); padding: 6px 4px; font-size: 13px; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button.sel { background: var(--accent2); color: #fff; }
+  table.meas { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
+  table.meas td, table.meas th { padding: 2px 0; } table.meas td:not(:first-child), table.meas th:not(:first-child) { text-align: right; }
+  table.meas td:nth-child(2) { font-weight: 600; } table.meas td:first-child { color: var(--muted); }
+  table.meas th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  table.meas .st { color: var(--muted); padding-left: 8px; }
+  table.meas.nostats .st { display: none; }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 7px; }
+  .btns3 { grid-template-columns: 1fr 1fr 1fr; }
+  textarea { width: 100%; resize: vertical; min-height: 38px; }
   #gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
   #gallery figure { margin: 0; cursor: pointer; }
   #gallery img { width: 100%; display: block; border-radius: 4px; border: 1px solid var(--border); }
   #gallery figcaption { font-size: 11px; color: var(--muted); text-align: center; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
-  kbd { background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; font-size: 12px; }
+  .check { display: flex; align-items: center; gap: 7px; font-size: 13px; margin: 4px 0; cursor: pointer; }
+  kbd { background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; font-size: 11px; }
   #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ok);
     color: #062; font-weight: 600; padding: 10px 18px; border-radius: 10px; opacity: 0; transition: opacity .25s;
-    pointer-events: none; }
+    pointer-events: none; z-index: 10; max-width: 90vw; text-align: center; }
   #toast.show { opacity: 1; }
+  #demoRow { display: none; }
 </style>
 </head>
 <body>
 <header>
-  <h1>DSO152 <span>·</span> captura para relatórios</h1>
+  <h1>DSO152 <span>·</span> osciloscópio</h1>
   <button id="btnConnect" class="blue">🔌 Conectar</button>
   <button id="btnDemo">Demo</button>
-  <button id="btnRun">⏸ Parar</button>
+  <span id="demoRow"><select id="selDemo" title="Sinal do modo Demo">
+    <option value="cal">Quadrada 1 kHz (borne)</option><option value="sine">Senoide 1,2 kHz</option>
+    <option value="pwm">PWM 737 Hz, 22 %</option><option value="tri">Triangular 150 Hz</option></select></span>
+  <button id="btnRun" title="Espaço">⏸ Parar</button>
+  <button id="btnSingle" title="S">Único</button>
+  <button id="btnAutoset" title="A">✨ Ajuste automático</button>
+  <span id="badge" class="badge off">—</span>
   <div id="status"><span class="dot"></span><span id="statusText">Desconectado</span></div>
 </header>
 <div id="banner">Este navegador não tem Web Serial. Abra esta página no <b>Chrome</b> ou no <b>Edge</b>
@@ -92,55 +133,100 @@
   <section>
     <div class="scope"><canvas id="live"></canvas></div>
     <div id="warn"></div>
+    <div id="curBar"><div class="grid" id="curGrid"></div>
+      <div class="hint">Arraste as linhas tracejadas no gráfico. Duplo clique numa linha a coloca no ponto clicado.</div></div>
+    <div id="fftBox"><div class="scope" style="border-radius:10px 10px 0 0"><canvas id="fft"></canvas></div><div id="fftInfo"></div></div>
   </section>
 
   <aside>
-    <div class="card">
-      <h2>📷 Foto para o relatório</h2>
-      <div class="row"><label for="inTitle">Título</label><input id="inTitle" type="text" placeholder="Ex.: Quadrada de calibração, 1 kHz"></div>
-      <div class="row"><label for="inNote">Observação</label><textarea id="inNote" rows="2" placeholder="Opcional: aparece no rodapé da foto"></textarea></div>
-      <div class="row"><label for="selTheme">Fundo</label>
-        <select id="selTheme"><option value="claro">Branco (impressão)</option><option value="escuro">Preto (como a tela)</option></select></div>
-      <button id="btnPhoto" class="big primary">📷 Salvar foto (PNG)</button>
-      <div class="btns">
-        <button id="btnCopy">📋 Copiar imagem</button>
-        <button id="btnCsv">📄 Salvar CSV</button>
+    <details class="card" open>
+      <summary>Vertical <span class="extra" id="sumV"></span></summary>
+      <div class="body">
+        <div class="row"><label for="selVdiv">V/div</label><select id="selVdiv"></select></div>
+        <div class="row"><label>Acoplamento</label><div class="seg" id="segCpl"><button data-v="dc">DC</button><button data-v="ac">AC</button></div></div>
+        <div class="row"><label for="rngPos">Posição</label><div class="pair"><input id="rngPos" type="range" min="-8" max="8" step="0.04" value="0"><span class="val" id="valPos"></span></div></div>
+        <div class="row"><label for="selProbe">Ponta</label>
+          <select id="selProbe"><option value="1">1X</option><option value="10">10X</option></select></div>
+        <div class="hint">Duplo clique na barra zera a posição.</div>
       </div>
-      <div class="hint">Atalhos: <kbd>P</kbd> foto · <kbd>C</kbd> copiar · <kbd>Espaço</kbd> parar/rodar</div>
-    </div>
+    </details>
 
-    <div class="card">
-      <h2>Medidas</h2>
-      <table class="meas">
-        <tr><td>Vpp</td><td id="mVpp">—</td></tr>
-        <tr><td>Vmáx / Vmín</td><td id="mMax">—</td></tr>
-        <tr><td>Média</td><td id="mMean">—</td></tr>
-        <tr><td>RMS</td><td id="mRms">—</td></tr>
-        <tr><td>Frequência</td><td id="mFreq">—</td></tr>
-        <tr><td>Período</td><td id="mPer">—</td></tr>
-        <tr><td>Ciclo ativo</td><td id="mDuty">—</td></tr>
-      </table>
-    </div>
+    <details class="card" open>
+      <summary>Horizontal <span class="extra" id="sumH"></span></summary>
+      <div class="body">
+        <div class="row"><label for="selTdiv">t/div</label><select id="selTdiv"></select></div>
+        <div class="row"><label for="inRate">Taxa livre</label><div class="pair"><input id="inRate" type="number" min="10" max="800000" step="1" placeholder="amostras/s"><button id="btnRate" class="small">Usar</button></div></div>
+        <div class="row"><label for="selN">Amostras</label><select id="selN">
+          <option value="400">400 (mais rápido)</option><option value="600">600 (padrão)</option>
+          <option value="1024">1024</option><option value="2048">2048 (melhor FFT)</option></select></div>
+        <label class="check"><input type="checkbox" id="chkFull"> Mostrar o bloco inteiro (não só as 12 divisões da tela)</label>
+      </div>
+    </details>
 
-    <div class="card">
-      <h2>Escalas</h2>
-      <div class="row"><label for="selVdiv">V/div</label><select id="selVdiv"></select></div>
-      <div class="row"><label for="selTdiv">t/div</label><select id="selTdiv"></select></div>
-      <div class="row"><label for="selCpl">Acoplamento</label>
-        <select id="selCpl"><option value="dc">DC</option><option value="ac">AC</option></select></div>
-      <div class="row"><label for="selTrig">Trigger</label>
-        <select id="selTrig"><option value="sobe">Borda de subida</option><option value="desce">Borda de descida</option><option value="livre">Livre (sem trigger)</option></select></div>
-      <div class="row"><label for="rngPos">Posição</label><input id="rngPos" type="range" min="-4" max="4" step="0.1" value="0"></div>
-      <div class="row"><label for="selProbe">Ponta</label>
-        <select id="selProbe"><option value="1">1X</option><option value="10">10X</option></select></div>
-      <div class="hint">V/div, t/div e acoplamento também mudam no aparelho.
-        <label style="cursor:pointer;text-decoration:underline">Carregar gain_cal.json<input id="fileCal" type="file" accept=".json" hidden></label></div>
-    </div>
+    <details class="card" open>
+      <summary>Trigger <span class="extra" id="sumT"></span></summary>
+      <div class="body">
+        <div class="row"><label>Modo</label><div class="seg" id="segMode"><button data-v="0">Auto</button><button data-v="1">Normal</button><button data-v="2">Único</button></div></div>
+        <div class="row"><label>Borda</label><div class="seg" id="segEdge"><button data-v="0">↗ Subida</button><button data-v="1">↘ Descida</button></div></div>
+        <div class="row"><label for="rngLvl">Nível</label><div class="pair"><input id="rngLvl" type="range" min="-8" max="8" step="0.04" value="0.5"><span class="val" id="valLvl"></span></div></div>
+        <div class="btns"><button id="btnMid" title="M">Nível no meio</button><button id="btnSingle2">Armar único</button></div>
+      </div>
+    </details>
 
-    <div class="card">
-      <h2>Fotos desta sessão</h2>
-      <div id="gallery"><span class="hint">As fotos salvas aparecem aqui; clique para baixar de novo.</span></div>
-    </div>
+    <details class="card" open>
+      <summary>Medidas <span class="extra"><button id="btnStats" class="small">Estatísticas</button></span></summary>
+      <div class="body">
+        <table class="meas nostats" id="tblMeas"><thead><tr><th></th><th>atual</th><th class="st">mín</th><th class="st">média</th><th class="st">máx</th></tr></thead><tbody></tbody></table>
+        <div class="hint" id="statsHint" style="display:none">Estatísticas desde <span id="statsN">0</span> quadros. <a href="#" id="lnkStatsReset" style="color:var(--accent2)">Zerar</a></div>
+      </div>
+    </details>
+
+    <details class="card">
+      <summary>Aquisição e análise</summary>
+      <div class="body">
+        <div class="row"><label>Modo</label><div class="seg" id="segAcq"><button data-v="normal">Normal</button><button data-v="avg">Média</button><button data-v="persist">Persist.</button></div></div>
+        <div class="row"><label for="selAvg">Quadros</label><select id="selAvg"><option>4</option><option selected>8</option><option>16</option><option>32</option><option>64</option></select></div>
+        <div class="btns"><button id="btnCursors">📏 Cursores</button><button id="btnFft">📊 Espectro (FFT)</button></div>
+        <div class="btns"><button id="btnRef">📌 Guardar referência</button><button id="btnRefClear" disabled>Apagar referência</button></div>
+        <div class="hint">A média soma quadros alinhados pelo trigger e reduz o ruído; a persistência sobrepõe os últimos traços.</div>
+      </div>
+    </details>
+
+    <details class="card" open>
+      <summary>📷 Foto para o relatório</summary>
+      <div class="body">
+        <div class="row"><label for="inTitle">Título</label><input id="inTitle" type="text" placeholder="Ex.: Quadrada de calibração, 1 kHz"></div>
+        <div class="row"><label for="inNote">Observação</label><textarea id="inNote" rows="2" placeholder="Opcional: aparece no rodapé da foto"></textarea></div>
+        <div class="row"><label for="selTheme">Fundo</label>
+          <select id="selTheme"><option value="claro">Branco (impressão)</option><option value="escuro">Preto (como a tela)</option></select></div>
+        <button id="btnPhoto" class="big primary">📷 Salvar foto (PNG)</button>
+        <div class="btns btns3">
+          <button id="btnCopy">📋 Copiar</button>
+          <button id="btnCsv">📄 CSV</button>
+          <button id="btnFftPhoto" disabled title="Ligue o espectro">📊 Espectro</button>
+        </div>
+        <div class="hint">A foto leva cursores, referência e medidas que estiverem na tela.</div>
+      </div>
+    </details>
+
+    <details class="card">
+      <summary>Aparelho</summary>
+      <div class="body">
+        <div class="btns"><button id="btnDefaults">↺ Tudo no padrão</button><button id="btnZero">⊘ Calibrar zero…</button></div>
+        <div class="hint" id="devInfo">Sem estado do aparelho ainda.</div>
+        <div class="hint"><label style="cursor:pointer;text-decoration:underline">Carregar gain_cal.json<input id="fileCal" type="file" accept=".json" hidden></label>
+          · escala em uso: <span id="calSrc">medida em 2026-10-25</span></div>
+      </div>
+    </details>
+
+    <details class="card">
+      <summary>Fotos desta sessão</summary>
+      <div class="body"><div id="gallery"><span class="hint">As fotos salvas aparecem aqui; clique para baixar de novo.</span></div></div>
+    </details>
+
+    <div class="hint">Atalhos: <kbd>Espaço</kbd> rodar/parar · <kbd>S</kbd> único · <kbd>A</kbd> ajuste automático ·
+      <kbd>M</kbd> nível no meio · <kbd>P</kbd> foto · <kbd>C</kbd> copiar · <kbd>K</kbd> cursores · <kbd>F</kbd> espectro ·
+      <kbd>↑</kbd><kbd>↓</kbd> V/div · <kbd>←</kbd><kbd>→</kbd> t/div</div>
   </aside>
 </main>
 <div id="toast"></div>
@@ -153,41 +239,52 @@ const VDIV = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20];   // faixas do 
 // contagens por volt de cada faixa, de pc/gain_cal.json (medido em 2026-10-25)
 const CPV_MEDIDO = [8683.752, 4344.488, 1734.479, 865.887, 429.515, 198.906, 99.513, 39.729, 19.834, 9.838, 4.927];
 const DC_LEVEL = 1;                       // nível do PA3 que dá DC (comando C)
+// bases de tempo da tela do aparelho (TB_RATE em src/main.c): índice = comando B
 const TDIVS = [50e-6, 100e-6, 200e-6, 500e-6, 1e-3, 2e-3, 5e-3, 10e-3, 20e-3, 50e-3, 100e-3];
-const SPD = 25, DIVX = 12, DIVY = 8;      // 25 amostras por divisão, grade 12x8 (como a tela)
+const SPD = 25, DIVX = 12, DIVY = 8;      // 25 amostras e 25 px por divisão, grade 12x8 (como a tela)
+const PX_DIV = 25, POS_MAX = 200;         // posição e nível do aparelho, em px (±8 divisões)
 const HDR = 11, N_MAX = 2048;
+const MODES = ["AUTO", "NORMAL", "ÚNICO"];
+const ZC_MSG = ["zeros gravados na flash", "havia sinal na entrada (ponta no jacaré?)", "zero improvável, nada gravado",
+                "o ADC não respondeu", "erro ao gravar a flash"];
 
 let CPV = CPV_MEDIDO.slice();
 try { const s = JSON.parse(localStorage.getItem("dso152_cpv") || "null"); if (Array.isArray(s) && s.length === 11) CPV = s; } catch {}
 
 /* ------------------------------ formatação ------------------------------ */
 const nf = (x, d = 3) => Number(x).toLocaleString("pt-BR", { maximumSignificantDigits: d });
-function fmtV(v) {
+function fmtV(v, d = 3) {
+  if (v == null || !isFinite(v)) return "—";
   const a = Math.abs(v);
   if (a === 0) return "0 V";
-  if (a >= 1) return nf(v) + " V";
-  if (a >= 1e-3) return nf(v * 1e3) + " mV";
-  return nf(v * 1e6) + " µV";
+  if (a >= 1) return nf(v, d) + " V";
+  if (a >= 1e-3) return nf(v * 1e3, d) + " mV";
+  return nf(v * 1e6, d) + " µV";
 }
-function fmtT(t) {
+function fmtT(t, d = 3) {
+  if (t == null || !isFinite(t)) return "—";
   const a = Math.abs(t);
   if (a === 0) return "0 s";
-  if (a >= 1) return nf(t) + " s";
-  if (a >= 1e-3) return nf(t * 1e3) + " ms";
-  if (a >= 1e-6) return nf(t * 1e6) + " µs";
-  return nf(t * 1e9) + " ns";
+  if (a >= 1) return nf(t, d) + " s";
+  if (a >= 1e-3) return nf(t * 1e3, d) + " ms";
+  if (a >= 1e-6) return nf(t * 1e6, d) + " µs";
+  return nf(t * 1e9, d) + " ns";
 }
-function fmtF(f) {
-  if (f >= 1e6) return nf(f / 1e6, 4) + " MHz";
-  if (f >= 1e3) return nf(f / 1e3, 4) + " kHz";
-  return nf(f, 4) + " Hz";
+function fmtF(f, d = 4) {
+  if (f == null || !isFinite(f)) return "—";
+  if (Math.abs(f) >= 1e6) return nf(f / 1e6, d) + " MHz";
+  if (Math.abs(f) >= 1e3) return nf(f / 1e3, d) + " kHz";
+  return nf(f, d) + " Hz";
 }
+const fmtP = p => (p == null || !isFinite(p)) ? "—" : nf(p, 3) + " %";
+const fmtDb = x => (x == null || !isFinite(x)) ? "—" : nf(x, 3) + " dBV";
 const stamp = d => d.toLocaleString("pt-BR");
 const fileStamp = d => d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0")
   + "_" + String(d.getHours()).padStart(2, "0") + String(d.getMinutes()).padStart(2, "0") + String(d.getSeconds()).padStart(2, "0");
 const slug = s => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40);
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 
-/* ------------------------------ frames ------------------------------ */
+/* ------------------------------ quadros ------------------------------ */
 const CRC = (() => { const t = new Uint8Array(256);
   for (let i = 0; i < 256; i++) { let c = i; for (let k = 0; k < 8; k++) c = (c & 0x80) ? ((c << 1) ^ 0x07) & 0xFF : (c << 1) & 0xFF; t[i] = c; }
   return t; })();
@@ -196,18 +293,28 @@ function crc8(b, from, to) { let c = 0; for (let i = from; i < to; i++) c = CRC[
 class FrameParser {
   constructor() { this.buf = new Uint8Array(0); }
   feed(chunk) {
-    const nb = new Uint8Array(this.buf.length + chunk.length);
-    nb.set(this.buf); nb.set(chunk, this.buf.length);
-    let b = nb, p = 0;
+    const b = new Uint8Array(this.buf.length + chunk.length);
+    b.set(this.buf); b.set(chunk, this.buf.length);
+    let p = 0;
     const out = [];
     for (;;) {
       let i = p;
-      while (i + 1 < b.length && !(b[i] === 0xA5 && b[i + 1] === 0x5A)) i++;
+      while (i + 1 < b.length && !(b[i] === 0xA5 && (b[i + 1] === 0x5A || b[i + 1] === 0x5B))) i++;
       if (i + 1 >= b.length) { p = Math.max(p, b.length - 1); break; }   // guarda meio-sync
       p = i;
+      if (b[p + 1] === 0x5B) {                                              // quadro de estado
+        if (b.length - p < 3) break;
+        const len = b[p + 2], total = 3 + len + 1;
+        if (len < 1 || len > 64) { p += 1; continue; }
+        if (b.length - p < total) break;
+        if (crc8(b, p + 2, p + total - 1) !== b[p + total - 1]) { p += 1; continue; }
+        out.push({ status: parseStatus(b.slice(p + 3, p + 3 + len)) });
+        p += total;
+        continue;
+      }
       if (b.length - p < HDR) break;                                        // cabeçalho incompleto
       const n = b[p + 2] | (b[p + 3] << 8);
-      if (n > N_MAX) { p += 1; continue; }                                  // sync falso
+      if (n > N_MAX || n < 1) { p += 1; continue; }                          // sync falso
       const total = HDR + 2 * n + 1;
       if (b.length - p < total) break;                                      // espera o resto
       if (crc8(b, p + 2, p + total - 1) !== b[p + total - 1]) { p += 1; continue; }
@@ -223,55 +330,218 @@ class FrameParser {
   }
 }
 
+function parseStatus(u) {
+  const dv = new DataView(u.buffer, u.byteOffset, u.length);
+  if (u.length < 26 || u[0] !== 1) return null;
+  return { gain: u[1], ac: u[2], mode: u[3], falling: u[4], running: u[5], waiting: u[6], cal: u[7], zflash: u[8],
+           tb: dv.getInt8(9), trigPx: dv.getInt16(10, true), posPx: dv.getInt16(12, true),
+           rateReq: dv.getUint32(14, true), rate: dv.getUint32(18, true), n: dv.getUint16(22, true),
+           sel: u[24], calRes: dv.getInt8(25) };
+}
+function buildStatus(s) {
+  const len = 26, b = new Uint8Array(3 + len + 1), dv = new DataView(b.buffer);
+  b[0] = 0xA5; b[1] = 0x5B; b[2] = len;
+  const p = 3;
+  b[p] = 1; b[p + 1] = s.gain; b[p + 2] = s.ac; b[p + 3] = s.mode; b[p + 4] = s.falling; b[p + 5] = s.running;
+  b[p + 6] = s.waiting; b[p + 7] = s.cal; b[p + 8] = s.zflash; dv.setInt8(p + 9, s.tb);
+  dv.setInt16(p + 10, s.trigPx, true); dv.setInt16(p + 12, s.posPx, true);
+  dv.setUint32(p + 14, s.rateReq, true); dv.setUint32(p + 18, s.rate, true); dv.setUint16(p + 22, s.n, true);
+  b[p + 24] = s.sel; dv.setInt8(p + 25, s.calRes);
+  b[b.length - 1] = crc8(b, 2, b.length - 1);
+  return b;
+}
+
+/* ------------------------------ estado do aparelho ------------------------------ */
+// o que o aparelho informou por último (A5 5B); sem aparelho, é o estado local
+const dev = { known: false, gain: 6, ac: 0, mode: 0, falling: 0, running: 1, waiting: 0, cal: 0, zflash: 0,
+              tb: 3, trigPx: 12, posPx: 0, rateReq: 50000, rate: 50000, n: 600, sel: 0, calRes: -1 };
+
 /* ------------------------------ análise ------------------------------ */
-function analyze(f, probe, trigMode) {
+// converte o quadro em volts na ponta e acha o trigger no nível do aparelho
+function analyze(f, o) {
   const cpv = CPV[f.gain] || 100 / VDIV[f.gain];
   const n = f.samples.length, v = new Float32Array(n);
   let lo = Infinity, hi = -Infinity, sat = false;
   for (let i = 0; i < n; i++) {
     const s = f.samples[i];
     if (s >= 3790 || s <= 300) sat = true;                 // op-amp do front-end satura em ~3805
-    const x = (s - f.zero) / cpv * probe;
+    const x = (s - f.zero) / cpv * o.probe;
     v[i] = x; if (x < lo) lo = x; if (x > hi) hi = x;
   }
-  const mid = (lo + hi) / 2, hy = (hi - lo) / 8;
+  const vdiv = VDIV[f.gain] * o.probe;
+  const level = o.trigPx / PX_DIV * vdiv;
+  const hyst = Math.max(vdiv / PX_DIV, 2 / cpv * o.probe);
+  const W = SPD * DIVX;
+  let trig = -1, armed = false;
+  for (let i = 0; i < n && trig < 0; i++) {
+    const x = v[i];
+    if (!o.falling) {
+      if (x < level - hyst) armed = true;
+      else if (armed && x >= level) { if (i >= SPD && i - SPD + W <= n) trig = i; armed = false; }
+    } else {
+      if (x > level + hyst) armed = true;
+      else if (armed && x <= level) { if (i >= SPD && i - SPD + W <= n) trig = i; armed = false; }
+    }
+  }
+  // janela mostrada: 12 divisões a partir de 1 divisão antes do trigger, ou o bloco inteiro
+  let start, count, tdiv;
+  if (o.full) { start = 0; count = n; tdiv = n / f.rate / DIVX; }
+  else { start = trig >= 0 ? trig - SPD : 0; count = Math.min(W, n - start); tdiv = SPD / f.rate; }
+  const t0 = trig >= 0 ? trig : (o.full ? 0 : start);      // instante zero do eixo
+  return { f, v, n, lo, hi, sat, trig, start, count, t0, tdiv, vdiv, level, rate: f.rate, probe: o.probe,
+           key: `${f.gain}|${f.ac}|${f.rate}|${n}|${o.probe}|${o.full}` };
+}
+
+// medidas de uma sequência de amostras em volts
+function measure(v, rate) {
+  const n = v.length;
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < n; i++) { if (v[i] < lo) lo = v[i]; if (v[i] > hi) hi = v[i]; }
+  const pp = hi - lo, mid = (lo + hi) / 2, hy = pp / 8;
   const rises = [], falls = [];
-  if ((hi - lo) * cpv / probe > 6) {                       // mais que ~6 contagens: tem sinal
-    let high = v[0] > mid;
+  const cross = (i, lv) => { const a = v[i - 1], b = v[i]; return b === a ? i : (i - 1) + (lv - a) / (b - a); };
+  if (pp > 0) {
+    let high = v[0] > mid, last = 0;
     for (let i = 1; i < n; i++) {
-      if (high) { if (v[i] < mid - hy) { high = false; falls.push(i); } }
-      else if (v[i] > mid + hy) { high = true; rises.push(i); }
+      if (high) {
+        if (v[i] < mid - hy) { high = false; let k = i; while (k > last + 1 && v[k - 1] < mid) k--; falls.push(cross(Math.max(1, k), mid)); last = i; }
+      } else if (v[i] > mid + hy) { high = true; let k = i; while (k > last + 1 && v[k - 1] > mid) k--; rises.push(cross(Math.max(1, k), mid)); last = i; }
     }
   }
-  const win = SPD * DIVX;
-  let trig = -1;
-  if (trigMode !== "livre") {
-    for (const i of (trigMode === "desce" ? falls : rises)) {
-      if (i >= SPD && i - SPD + win <= n) { trig = i; break; }
-    }
-  }
-  let a0 = 0, a1 = n;                                       // medidas em períodos inteiros
-  if (rises.length >= 2) { a0 = rises[0]; a1 = rises[rises.length - 1]; }
+  const periodic = rises.length >= 2;
+  let a0 = 0, a1 = n;
+  if (periodic) { a0 = Math.ceil(rises[0]); a1 = Math.floor(rises[rises.length - 1]); }
   let sum = 0, sq = 0, above = 0;
   for (let i = a0; i < a1; i++) { sum += v[i]; sq += v[i] * v[i]; if (v[i] > mid) above++; }
-  const cnt = Math.max(1, a1 - a0);
-  const freq = rises.length >= 2 ? (rises.length - 1) * f.rate / (rises[rises.length - 1] - rises[0]) : null;
-  return {
-    f, v, n, lo, hi, mid, sat, trig, start: trig >= 0 ? trig - SPD : 0,
-    mean: sum / cnt, rms: Math.sqrt(sq / cnt), freq, duty: rises.length >= 2 ? above / cnt : null,
-    vdiv: VDIV[f.gain] * probe, tdiv: SPD / f.rate, probe,
+  const cnt = Math.max(1, a1 - a0), mean = sum / cnt, rms = Math.sqrt(sq / cnt);
+  const period = periodic ? (rises[rises.length - 1] - rises[0]) / (rises.length - 1) / rate : null;
+  const freq = period ? 1 / period : null;
+  const duty = periodic ? above / cnt : null;
+
+  // topo e base: modas das metades de cima e de baixo (para quadradas); senão máx e mín
+  let top = hi, base = lo, flat = false;
+  if (pp > 0) {
+    const B = 64, hist = new Uint32Array(B);
+    for (let i = a0; i < a1; i++) hist[Math.min(B - 1, Math.floor((v[i] - lo) / pp * B))]++;
+    let bt = B / 2, bb = 0;
+    for (let k = B / 2; k < B; k++) if (hist[k] > hist[bt]) bt = k;
+    for (let k = 0; k < B / 2; k++) if (hist[k] > hist[bb]) bb = k;
+    if (hist[bt] > 0.08 * cnt && hist[bb] > 0.08 * cnt) {
+      flat = true;
+      const avgBin = (k0) => { let s = 0, c = 0; for (let i = a0; i < a1; i++) { const k = Math.floor((v[i] - lo) / pp * B);
+        if (k >= k0 - 1 && k <= k0 + 1) { s += v[i]; c++; } } return c ? s / c : lo + (k0 + 0.5) * pp / B; };
+      top = avgBin(bt); base = avgBin(bb);
+    }
+  }
+  const amp = top - base;
+  // subida e descida 10-90 %, na primeira borda completa
+  const edgeTime = (cr, rising) => {
+    if (amp <= 0) return null;
+    const l10 = base + 0.1 * amp, l90 = base + 0.9 * amp;
+    const i = Math.round(cr);
+    let a = i, b = i;
+    if (rising) { while (a > 1 && v[a - 1] > l10) a--; while (b < n - 1 && v[b] < l90) b++; }
+    else { while (a > 1 && v[a - 1] < l90) a--; while (b < n - 1 && v[b] > l10) b++; }
+    if (a <= 1 || b >= n - 1) return null;
+    const ta = cross(a, rising ? l10 : l90), tb = cross(b, rising ? l90 : l10);
+    return Math.max(0, tb - ta) / rate;
   };
+  const rise = rises.length ? edgeTime(rises.find(r => r > 3) ?? rises[0], true) : null;
+  const fall = falls.length ? edgeTime(falls.find(r => r > 3) ?? falls[0], false) : null;
+  return {
+    pp, max: hi, min: lo, top: flat ? top : null, base: flat ? base : null, amp: flat ? amp : null,
+    mean, rms, rmsac: Math.sqrt(Math.max(0, rms * rms - mean * mean)),
+    freq, period, duty: duty != null ? duty * 100 : null,
+    wpos: duty != null && period ? duty * period : null, wneg: duty != null && period ? (1 - duty) * period : null,
+    rise: flat ? rise : null, fall: flat ? fall : null,
+    over: flat && amp > 0 ? (hi - top) / amp * 100 : null, under: flat && amp > 0 ? (base - lo) / amp * 100 : null,
+    dt: 1 / rate,
+  };
+}
+
+const MEAS = [
+  ["freq", "Frequência", fmtF], ["period", "Período", fmtT], ["pp", "Vpp", fmtV], ["max", "Vmáx", fmtV], ["min", "Vmín", fmtV],
+  ["amp", "Amplitude", fmtV], ["top", "Topo", fmtV], ["base", "Base", fmtV], ["mean", "Média", fmtV], ["rms", "RMS", fmtV],
+  ["rmsac", "RMS (AC)", fmtV], ["duty", "Ciclo ativo", fmtP], ["wpos", "Largura +", fmtT], ["wneg", "Largura −", fmtT],
+  ["rise", "Subida 10–90 %", fmtT], ["fall", "Descida 90–10 %", fmtT], ["over", "Sobressinal", fmtP], ["under", "Subsinal", fmtP],
+];
+const V_KEYS = new Set(["pp", "max", "min", "amp", "top", "base", "mean", "rms", "rmsac"]);
+const fmtMeas = (m, k, fmt) => {
+  const x = m[k];
+  if (V_KEYS.has(k) && x != null && m.vres && Math.abs(x) < m.vres) return "≈ 0 V";   // abaixo da resolução
+  if ((k === "rise" || k === "fall") && x != null && x <= 1.5 * m.dt) return "< " + fmtT(1.5 * m.dt);   // limite da amostragem
+  return fmt(x);
+};
+
+/* ------------------------------ FFT ------------------------------ */
+function fftInPlace(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = a + len / 2;
+        const xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+        const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+      }
+    }
+  }
+}
+// espectro de amplitude (pico) com janela de Hann; fundamental, harmônicas e THD
+function spectrum(v, rate) {
+  let N = 1; while (N * 2 <= v.length) N *= 2;
+  if (N < 64) return null;
+  const re = new Float64Array(N), im = new Float64Array(N);
+  let mean = 0; for (let i = 0; i < N; i++) mean += v[i]; mean /= N;
+  for (let i = 0; i < N; i++) re[i] = (v[i] - mean) * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1)));
+  fftInPlace(re, im);
+  const half = N / 2, mag = new Float64Array(half);
+  for (let k = 0; k < half; k++) mag[k] = 2 * Math.hypot(re[k], im[k]) / (N * 0.5);   // ganho coerente de Hann = 0,5
+  mag[0] = Math.abs(mean);
+  const df = rate / N;
+  let kf = 2; for (let k = 3; k < half - 1; k++) if (mag[k] > mag[kf]) kf = k;
+  const tone = c => {                                     // amplitude pela energia de ±2 bins (ENBW de Hann = 1,5)
+    let s = 0; for (let k = Math.max(1, c - 2); k <= Math.min(half - 1, c + 2); k++) s += mag[k] * mag[k];
+    return Math.sqrt(s / 1.5);
+  };
+  // pico refinado por interpolação parabólica no log
+  const a = Math.log(mag[kf - 1] + 1e-12), b = Math.log(mag[kf] + 1e-12), c = Math.log(mag[kf + 1] + 1e-12);
+  const d = (a - 2 * b + c) !== 0 ? 0.5 * (a - c) / (a - 2 * b + c) : 0;
+  const f1 = (kf + d) * df, A1 = tone(kf);
+  const harm = [];
+  let h2 = 0;
+  for (let h = 2; h <= 10; h++) {
+    const center = Math.round((kf + d) * h);
+    if (center + 2 >= half) break;
+    let best = center; for (let k = center - 2; k <= center + 2; k++) if (mag[k] > mag[best]) best = k;
+    const Ah = tone(best); harm.push({ h, f: best * df, A: Ah }); h2 += Ah * Ah;
+  }
+  const noise = (() => { const s = Array.from(mag.slice(2)).sort((x, y) => x - y); return s[Math.floor(s.length / 2)] || 1e-9; })();
+  return { N, df, mag, f1, A1, harm, thd: A1 > 0 && harm.length ? Math.sqrt(h2) / A1 * 100 : null,
+           strong: A1 > noise * 30, rate };
 }
 
 /* ------------------------------ desenho ------------------------------ */
 const THEMES = {
   escuro: { bg: "#000", plot: "#000", grid: "#3a3a3a", axis: "#777", trace: "#ffd400", text: "#e8e8e8",
-            muted: "#9a9a9a", zero: "#00e0ff", trig: "#ff8c00", panel: "#111", head: "#fff" },
+            muted: "#9a9a9a", zero: "#00e0ff", trig: "#ff8c00", panel: "#111", head: "#fff", ref: "#ff4fd8",
+            cur: "#3aa0ff", curH: "#3ccf6e" },
   claro:  { bg: "#fff", plot: "#fff", grid: "#c9ced6", axis: "#6b7280", trace: "#0b5cd5", text: "#111",
-            muted: "#555", zero: "#0a8f6a", trig: "#e06500", panel: "#f3f5f8", head: "#000" },
+            muted: "#555", zero: "#0a8f6a", trig: "#e06500", panel: "#f3f5f8", head: "#000", ref: "#c2189a",
+            cur: "#7c3aed", curH: "#0f8a4a" },
 };
+const FONT = '"Segoe UI", system-ui, sans-serif';
 
-function drawScope(ctx, a, L, th, pos) {
+// view: { vdiv, tdiv, tLeft, pos (div), traces: [{t0, dt, v, from, count, color, lw, alpha}], zero, trigV, cursors }
+function drawScope(ctx, view, L, th) {
   const { x, y, w, h, font, lw } = L, dx = w / DIVX, dy = h / DIVY;
   ctx.fillStyle = th.plot; ctx.fillRect(x, y, w, h);
   ctx.save();
@@ -280,25 +550,45 @@ function drawScope(ctx, a, L, th, pos) {
   for (let i = 1; i < DIVX; i++) { ctx.moveTo(x + i * dx, y); ctx.lineTo(x + i * dx, y + h); }
   for (let j = 1; j < DIVY; j++) { ctx.moveTo(x, y + j * dy); ctx.lineTo(x + w, y + j * dy); }
   ctx.stroke(); ctx.setLineDash([]);
-  ctx.strokeStyle = th.axis; ctx.lineWidth = Math.max(1, lw / 2.5); ctx.beginPath();      // eixos centrais com marcas
+  ctx.strokeStyle = th.axis; ctx.lineWidth = Math.max(1, lw / 2.5); ctx.beginPath();
   ctx.moveTo(x, y + h / 2); ctx.lineTo(x + w, y + h / 2); ctx.moveTo(x + w / 2, y); ctx.lineTo(x + w / 2, y + h);
   for (let i = 0; i <= DIVX * 5; i++) { const px = x + i * dx / 5; ctx.moveTo(px, y + h / 2 - 3); ctx.lineTo(px, y + h / 2 + 3); }
   for (let j = 0; j <= DIVY * 5; j++) { const py = y + j * dy / 5; ctx.moveTo(x + w / 2 - 3, py); ctx.lineTo(x + w / 2 + 3, py); }
   ctx.stroke();
   ctx.strokeRect(x, y, w, h);
   ctx.restore();
+  if (!view) return;
 
-  const yOf = volts => y + h / 2 - (volts / (a ? a.vdiv : 1) + pos) * dy;
-  if (a) {
-    ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
-    ctx.strokeStyle = th.trace; ctx.lineWidth = lw; ctx.lineJoin = "round"; ctx.beginPath();
-    const count = Math.min(SPD * DIVX, a.n - a.start), sx = w / (SPD * DIVX);
-    for (let k = 0; k < count; k++) {
-      const px = x + k * sx, py = yOf(a.v[a.start + k]);
+  const xOf = t => x + (t - view.tLeft) / (view.tdiv * DIVX) * w;
+  const yOf = volts => y + h / 2 - (volts / view.vdiv + view.pos) * dy;
+  ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+  for (const tr of view.traces) {
+    ctx.globalAlpha = tr.alpha ?? 1; ctx.strokeStyle = tr.color; ctx.lineWidth = tr.lw ?? lw; ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (let k = 0; k < tr.count; k++) {
+      const px = xOf(tr.t0 + k * tr.dt), py = yOf(tr.v[tr.from + k]);
       if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
-    ctx.stroke(); ctx.restore();
+    ctx.stroke();
   }
+  ctx.globalAlpha = 1;
+  // cursores
+  const cur = view.cursors;
+  if (cur) {
+    ctx.setLineDash([lw * 3, lw * 2]); ctx.lineWidth = Math.max(1, lw * 0.8);
+    ctx.strokeStyle = th.cur; ctx.beginPath();
+    for (const fx of [cur.t1, cur.t2]) { ctx.moveTo(x + fx * w, y); ctx.lineTo(x + fx * w, y + h); }
+    ctx.stroke();
+    ctx.strokeStyle = th.curH; ctx.beginPath();
+    for (const fy of [cur.v1, cur.v2]) { ctx.moveTo(x, y + fy * h); ctx.lineTo(x + w, y + fy * h); }
+    ctx.stroke(); ctx.setLineDash([]);
+    ctx.font = `600 ${font * 0.8}px ${FONT}`; ctx.textBaseline = "top";
+    ctx.fillStyle = th.cur; ctx.textAlign = "left";
+    ctx.fillText("t1", x + cur.t1 * w + 3, y + 3); ctx.fillText("t2", x + cur.t2 * w + 3, y + 3);
+    ctx.fillStyle = th.curH; ctx.textAlign = "right"; ctx.textBaseline = "bottom";
+    ctx.fillText("V1", x + w - 4, y + cur.v1 * h - 2); ctx.fillText("V2", x + w - 4, y + cur.v2 * h - 2);
+  }
+  ctx.restore();
 
   // marcador do 0 V (esquerda) e do nível de trigger (direita)
   const tri = (px, py, dir, color) => {
@@ -307,174 +597,335 @@ function drawScope(ctx, a, L, th, pos) {
   };
   const clampY = py => Math.min(y + h, Math.max(y, py));
   tri(x - 2, clampY(yOf(0)), 1, th.zero);
-  if (a && a.trig >= 0) tri(x + w + 2, clampY(yOf(a.mid)), -1, th.trig);
+  if (view.trigV != null) tri(x + w + 2, clampY(yOf(view.trigV)), -1, th.trig);
+  if (view.trigT != null) {                                // instante do trigger (topo)
+    const px = xOf(view.trigT);
+    if (px >= x && px <= x + w) { const s = font * 0.4; ctx.fillStyle = th.trig; ctx.beginPath();
+      ctx.moveTo(px, y + s * 1.2); ctx.lineTo(px - s, y); ctx.lineTo(px + s, y); ctx.fill(); }
+  }
 
   if (L.labels) {
-    ctx.fillStyle = th.muted; ctx.font = `${font * 0.8}px "Segoe UI", system-ui, sans-serif`;
+    ctx.fillStyle = th.muted; ctx.font = `${font * 0.8}px ${FONT}`;
     ctx.textAlign = "right"; ctx.textBaseline = "middle";
-    if (a) for (let j = 0; j <= DIVY; j++) ctx.fillText(fmtV((DIVY / 2 - j - pos) * a.vdiv), x - font * 0.9, y + j * dy);
+    for (let j = 0; j <= DIVY; j++) ctx.fillText(fmtV((DIVY / 2 - j - view.pos) * view.vdiv), x - font * 0.9, y + j * dy);
     ctx.textAlign = "center"; ctx.textBaseline = "top";
-    const t0 = a && a.trig >= 0 ? 1 : 0;
-    if (a) for (let i = 0; i <= DIVX; i += (L.every || 1)) ctx.fillText(fmtT((i - t0) * a.tdiv), x + i * dx, y + h + font * 0.4);
+    for (let i = 0; i <= DIVX; i += (L.every || 1)) ctx.fillText(fmtT(view.tLeft + i * view.tdiv), x + i * dx, y + h + font * 0.4);
   }
 }
 
-function settingsLine(a) {
-  return `${fmtV(a.vdiv)}/div · ${fmtT(a.tdiv)}/div · ${a.f.ac ? "AC" : "DC"} · ponta ${a.probe}X · `
-       + `${nf(a.f.rate, 4)} amostras/s` + (a.trig >= 0 ? ` · trigger na ${trigLabel()}` : " · sem trigger");
-}
-function trigLabel() { return els.selTrig.value === "desce" ? "descida" : "subida"; }
-
-function measRows(a) {
-  return [
-    ["Vpp", fmtV(a.hi - a.lo)],
-    ["Vmáx", fmtV(a.hi)], ["Vmín", fmtV(a.lo)],
-    ["Média", fmtV(a.mean)], ["RMS", fmtV(a.rms)],
-    ["Frequência", a.freq ? fmtF(a.freq) : "—"],
-    ["Período", a.freq ? fmtT(1 / a.freq) : "—"],
-    ["Ciclo ativo", a.duty != null ? nf(a.duty * 100, 3) + " %" : "—"],
-  ];
-}
-
-/* foto: 1600x1040, cabeçalho, grade com eixos e tabela de medidas */
-function renderPhoto(a, themeName, title, note, when) {
-  const th = THEMES[themeName], W = 1600, H = 1040;
-  const c = document.createElement("canvas"); c.width = W; c.height = H;
-  const ctx = c.getContext("2d");
-  const ff = '"Segoe UI", system-ui, sans-serif';
-  ctx.fillStyle = th.bg; ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = th.head; ctx.font = `600 34px ${ff}`; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
-  ctx.fillText(title || "Forma de onda — DSO152", 60, 62);
-  ctx.fillStyle = th.muted; ctx.font = `20px ${ff}`;
-  ctx.fillText(`${stamp(when)}   ·   ${settingsLine(a)}`, 60, 98);
-
-  const P = { x: 150, y: 130, w: 1140, h: 760, font: 22, lw: 3, labels: true };
-  drawScope(ctx, a, P, th, +els.rngPos.value);
-  ctx.fillStyle = th.muted; ctx.font = `20px ${ff}`; ctx.textAlign = "center";
-  ctx.fillText(a.trig >= 0 ? "tempo (0 = trigger)" : "tempo", P.x + P.w / 2, P.y + P.h + 62);
-  ctx.save(); ctx.translate(40, P.y + P.h / 2); ctx.rotate(-Math.PI / 2);
-  ctx.fillText(`tensão na ponta (${a.probe}X)`, 0, 0); ctx.restore();
-
-  // tabela de medidas
-  const mx = 1325, my = 130, mw = 245;
-  ctx.fillStyle = th.panel; ctx.fillRect(mx, my, mw, 420);
-  ctx.fillStyle = th.head; ctx.font = `600 22px ${ff}`; ctx.textAlign = "left";
-  ctx.fillText("Medidas", mx + 18, my + 40);
-  let ry = my + 84;
-  for (const [k, val] of measRows(a)) {
-    ctx.fillStyle = th.muted; ctx.font = `19px ${ff}`; ctx.textAlign = "left"; ctx.fillText(k, mx + 18, ry);
-    ctx.fillStyle = th.text; ctx.font = `600 20px ${ff}`; ctx.textAlign = "right"; ctx.fillText(val, mx + mw - 18, ry);
-    ry += 42;
+function drawSpectrum(ctx, sp, L, th, maxF) {
+  const { x, y, w, h, font, lw } = L;
+  ctx.fillStyle = th.plot; ctx.fillRect(x, y, w, h);
+  if (!sp) return;
+  const fMax = maxF || sp.rate / 2;
+  let top = -200; for (let k = 1; k < sp.mag.length; k++) top = Math.max(top, 20 * Math.log10(sp.mag[k] / Math.SQRT2 + 1e-12));
+  top = Math.ceil((top + 5) / 10) * 10; const bot = top - 100;
+  ctx.strokeStyle = th.grid; ctx.lineWidth = 1; ctx.setLineDash([3, 4]); ctx.beginPath();
+  ctx.fillStyle = th.muted; ctx.font = `${font * 0.8}px ${FONT}`; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (let db = bot + 20; db <= top; db += 20) { const py = y + (top - db) / (top - bot) * h; ctx.moveTo(x, py); ctx.lineTo(x + w, py); ctx.fillText(db + " dBV", x - 6, py); }
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let i = 0; i <= 10; i++) { const px = x + i * w / 10; ctx.moveTo(px, y); ctx.lineTo(px, y + h); ctx.fillText(fmtF(fMax * i / 10, 3), px, y + h + 4); }
+  ctx.stroke(); ctx.setLineDash([]);
+  ctx.strokeStyle = th.axis; ctx.strokeRect(x, y, w, h);
+  ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+  ctx.strokeStyle = th.trace; ctx.lineWidth = lw; ctx.beginPath();
+  const kMax = Math.min(sp.mag.length - 1, Math.ceil(fMax / sp.df));
+  for (let k = 1; k <= kMax; k++) {
+    const px = x + k * sp.df / fMax * w, db = 20 * Math.log10(sp.mag[k] / Math.SQRT2 + 1e-12);
+    const py = y + (top - db) / (top - bot) * h;
+    if (k === 1) ctx.moveTo(px, py); else ctx.lineTo(px, py);
   }
-  if (a.sat) {
-    ctx.fillStyle = THEMES.claro.trig; ctx.font = `600 18px ${ff}`; ctx.textAlign = "left";
-    ctx.fillText("⚠ sinal saturado:", mx, my + 460); ctx.fillText("aumente o V/div", mx, my + 484);
+  ctx.stroke();
+  if (sp.strong) {                                          // marca a fundamental e as harmônicas
+    ctx.fillStyle = th.trig; ctx.font = `600 ${font * 0.75}px ${FONT}`; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+    const mark = (f, A, label) => { if (f > fMax) return; const px = x + f / fMax * w, db = 20 * Math.log10(A / Math.SQRT2 + 1e-12);
+      const py = y + (top - db) / (top - bot) * h; ctx.fillText(label, px, Math.max(y + font, py - 4)); };
+    mark(sp.f1, sp.A1, "1");
+    for (const hm of sp.harm) if (hm.A > sp.A1 * 1e-3) mark(hm.f, hm.A, String(hm.h));
   }
-
-  ctx.textAlign = "left"; ctx.fillStyle = th.text; ctx.font = `20px ${ff}`;
-  if (note) wrapText(ctx, note, 60, 990, 1200, 26);
-  ctx.fillStyle = th.muted; ctx.font = `16px ${ff}`; ctx.textAlign = "right";
-  ctx.fillText("FNIRSI DSO152 · firmware customizado", W - 30, H - 20);
-  return c;
-}
-function wrapText(ctx, text, x, y, maxW, lh) {
-  let line = "";
-  for (const word of text.split(/\s+/)) {
-    const t = line ? line + " " + word : word;
-    if (ctx.measureText(t).width > maxW && line) { ctx.fillText(line, x, y); y += lh; line = word; }
-    else line = t;
-  }
-  if (line) ctx.fillText(line, x, y);
+  ctx.restore();
 }
 
 /* ------------------------------ interface ------------------------------ */
 const els = Object.fromEntries([...document.querySelectorAll("[id]")].map(e => [e.id, e]));
 VDIV.forEach((v, i) => els.selVdiv.add(new Option(fmtV(v) + "/div", i)));
 TDIVS.forEach((t, i) => els.selTdiv.add(new Option(fmtT(t) + "/div", i)));
-els.selTdiv.add(new Option("(outro)", "x"));
+els.selTdiv.add(new Option("(taxa livre)", "x"));
+const measBody = els.tblMeas.tBodies[0];
+for (const [k, label] of MEAS) {
+  const tr = measBody.insertRow(); tr.dataset.k = k;
+  tr.innerHTML = `<td>${label}</td><td>—</td><td class="st"></td><td class="st"></td><td class="st"></td>`;
+}
 
 function pref(k, d) { try { return localStorage.getItem("dso152_" + k) ?? d; } catch { return d; } }
 function savePref(k, v) { try { localStorage.setItem("dso152_" + k, v); } catch {} }
 els.selTheme.value = pref("theme", "claro");
 els.selProbe.value = pref("probe", "1");
-els.selTrig.value = pref("trig", "sobe");
+els.selAvg.value = pref("avg", "8");
+let acqMode = pref("acq", "normal");
+els.chkFull.checked = pref("full", "0") === "1";
 
-let lastFrame = null, shown = null, analysis = null, running = true, dirty = true;
-let frames = 0, fpsT = performance.now();
+const ui = { cursors: false, fft: false, stats: false, cur: { t1: 0.25, t2: 0.75, v1: 0.3, v2: 0.7 } };
+let lastFrame = null, shown = null, view = null, meas = null, spec = null, dirty = true;
+let histBuf = [], histKey = "", reference = null;
+const stats = { n: 0, key: "", acc: {} };
+let frames = 0, fpsT = performance.now(), lastStatusAt = 0;
 
 function toast(msg, bad) {
   els.toast.textContent = msg; els.toast.style.background = bad ? "var(--bad)" : "var(--ok)";
   els.toast.style.color = bad ? "#fff" : "#062"; els.toast.classList.add("show");
-  clearTimeout(toast.t); toast.t = setTimeout(() => els.toast.classList.remove("show"), 1800);
+  clearTimeout(toast.t); toast.t = setTimeout(() => els.toast.classList.remove("show"), 2600);
 }
 function setStatus(text, cls) { els.statusText.textContent = text; els.status.className = cls || ""; }
+const probe = () => +els.selProbe.value;
+const curVdiv = () => VDIV[(shown && shown.gain) ?? dev.gain] * probe();
 
-function onFrame(f) { lastFrame = f; frames++; if (running) dirty = true; }
+function setSeg(seg, value) { for (const b of seg.children) b.classList.toggle("sel", b.dataset.v === String(value)); }
+function segOn(seg, fn) { seg.addEventListener("click", e => { const b = e.target.closest("button"); if (b) fn(b.dataset.v); }); }
 
-function syncControls(f) {
-  if (document.activeElement !== els.selVdiv) els.selVdiv.value = f.gain;
-  if (document.activeElement !== els.selCpl) els.selCpl.value = f.ac ? "ac" : "dc";
-  if (document.activeElement !== els.selTdiv) {
-    const t = SPD / f.rate, i = TDIVS.findIndex(x => Math.abs(x - t) / x < 0.01);
-    els.selTdiv.value = i >= 0 ? i : "x";
+/* recebe um quadro de dados */
+function onFrame(f, re = false) {
+  if (f.status) { onStatus(f.status); return; }
+  if (!re) {
+    if (!dev.running && dev.known) return;                             // parado: congela o traço
+    lastFrame = f; frames++;
+    waiters.forEach(w => w(f));
+  }
+  const a = analyze(f, { probe: probe(), trigPx: dev.trigPx, falling: dev.falling, full: els.chkFull.checked });
+  const triggered = a.trig >= 0;
+  if (dev.mode !== 0 && !triggered) { webWaiting = true; return; }      // NORMAL/ÚNICO sem disparo: mantém o traço
+  webWaiting = false;
+  if (a.key !== histKey) { histBuf = []; histKey = a.key; }
+  // janela alinhada pelo trigger (média e persistência)
+  const win = a.v.slice(a.start, a.start + a.count);
+  if (!re && acqMode !== "normal" && (triggered || a.start === 0)) {
+    histBuf.push(win);
+    const max = acqMode === "avg" ? +els.selAvg.value : 24;
+    while (histBuf.length > max) histBuf.shift();
+  }
+  shown = f; dirty = true;
+  buildView(a, win, re);
+}
+const reprocess = () => { if (lastFrame) onFrame(lastFrame, true); };
+let webWaiting = false;
+
+function buildView(a, win, re) {
+  const traces = [];
+  let disp = win;
+  if (acqMode === "avg" && histBuf.length > 1) {
+    const L = Math.min(...histBuf.map(h => h.length)); disp = new Float32Array(L);
+    for (const h of histBuf) for (let i = 0; i < L; i++) disp[i] += h[i] / histBuf.length;
+  }
+  const dt = 1 / a.rate, t0 = (a.start - a.t0) * dt;
+  const th = THEMES.escuro;
+  if (acqMode === "persist") {
+    histBuf.slice(0, -1).forEach((h, i, arr) => traces.push({ t0, dt, v: h, from: 0, count: h.length, color: th.trace, alpha: 0.08 + 0.3 * (i + 1) / arr.length, lw: 1 }));
+  }
+  if (reference) traces.unshift({ t0: reference.t0, dt: reference.dt, v: reference.v, from: 0, count: reference.v.length, color: "REF" });
+  traces.push({ t0, dt, v: disp, from: 0, count: disp.length, color: "TRACE" });
+  view = { a, disp, vdiv: a.vdiv, tdiv: a.tdiv, tLeft: t0, pos: dev.posPx / PX_DIV, traces,
+           trigV: a.level, trigT: a.trig >= 0 ? 0 : null, rate: a.rate };
+  // medidas: na janela média se houver; senão no bloco inteiro (mais períodos)
+  meas = measure(acqMode === "avg" && histBuf.length > 1 ? disp : a.v, a.rate);
+  meas.vres = a.vdiv / PX_DIV / 4;                          // ~1/4 de pixel da tela do aparelho
+  if (ui.fft) spec = spectrum(a.v, a.rate);
+  if (!re) accumulateStats(a.key);
+}
+
+function accumulateStats(key) {
+  if (stats.key !== key) { stats.key = key; stats.n = 0; stats.acc = {}; }
+  stats.n++;
+  for (const [k] of MEAS) {
+    const x = meas[k]; if (x == null || !isFinite(x)) continue;
+    const s = stats.acc[k] || (stats.acc[k] = { min: x, max: x, sum: 0, c: 0 });
+    s.min = Math.min(s.min, x); s.max = Math.max(s.max, x); s.sum += x; s.c++;
   }
 }
 
-function updateMeas(a) {
-  const rows = measRows(a);
-  els.mVpp.textContent = rows[0][1];
-  els.mMax.textContent = rows[1][1] + " / " + rows[2][1];
-  els.mMean.textContent = rows[3][1]; els.mRms.textContent = rows[4][1];
-  els.mFreq.textContent = rows[5][1]; els.mPer.textContent = rows[6][1]; els.mDuty.textContent = rows[7][1];
-  els.warn.textContent = a.sat ? "⚠ Sinal saturado no amplificador: aumente o V/div para medir certo." : "";
+/* recebe o estado do aparelho */
+function onStatus(s) {
+  if (!s) return;
+  lastStatusAt = performance.now();
+  const prevCal = dev.cal, prevRes = dev.calRes, firstTime = !dev.known;
+  Object.assign(dev, s, { known: true });
+  if (prevCal !== 0 && s.cal === 0 && s.calRes >= 0 && (s.calRes !== prevRes || prevCal === 2) && !firstTime) {
+    toast("Calibração do zero: " + (ZC_MSG[s.calRes] || "terminou"), s.calRes !== 0);
+  }
+  syncControls(); dirty = true;
 }
 
-function drawLive() {
-  const cv = els.live, dpr = window.devicePixelRatio || 1;
+function syncControls() {
+  const act = document.activeElement;
+  if (act !== els.selVdiv) els.selVdiv.value = dev.gain;
+  setSeg(els.segCpl, dev.ac ? "ac" : "dc");
+  if (act !== els.selTdiv) els.selTdiv.value = dev.tb >= 0 ? dev.tb : "x";
+  if (act !== els.inRate && dev.tb < 0) els.inRate.value = dev.rateReq;
+  if (act !== els.selN) els.selN.value = [...els.selN.options].some(o => +o.value === dev.n) ? dev.n : els.selN.value;
+  setSeg(els.segMode, dev.mode); setSeg(els.segEdge, dev.falling);
+  if (!sliding.pos) els.rngPos.value = dev.posPx / PX_DIV;
+  if (!sliding.lvl) els.rngLvl.value = dev.trigPx / PX_DIV;
+  const vd = curVdiv();
+  els.valPos.textContent = fmtV(dev.posPx / PX_DIV * vd);
+  els.valLvl.textContent = fmtV(dev.trigPx / PX_DIV * vd);
+  els.sumV.textContent = `${fmtV(vd)}/div · ${dev.ac ? "AC" : "DC"}`;
+  const tdiv = SPD / (dev.rate || 1);
+  els.sumH.textContent = `${fmtT(tdiv)}/div · ${nf(dev.rate, 4)} a/s`;
+  els.sumT.textContent = `${MODES[dev.mode]} ${dev.falling ? "↘" : "↗"} ${fmtV(dev.trigPx / PX_DIV * vd)}`;
+  // RUN / WAIT / STOP
+  const connected = !!(port || demoTimer);
+  const stopped = !dev.running || dev.cal !== 0;
+  const wait = !stopped && (dev.waiting || (dev.mode !== 0 && webWaiting));
+  els.badge.textContent = !connected ? "—" : dev.cal ? "CALIBRANDO" : stopped ? "PARADO" : wait ? "ESPERANDO" : "RODANDO";
+  els.badge.className = "badge " + (!connected ? "off" : stopped ? "stop" : wait ? "wait" : "run");
+  els.btnRun.textContent = dev.running ? "⏸ Parar" : "▶ Rodar";
+  els.btnRun.classList.toggle("stopped", !dev.running);
+  els.devInfo.textContent = dev.known
+    ? `Zero: ${dev.zflash ? "medido no aparelho (flash)" : "valores do PC (gain_cal.h)"} · ${dev.n} amostras por quadro · `
+      + `taxa pedida ${nf(dev.rateReq, 4)}/s, real ${nf(dev.rate, 4)}/s`
+    : "Sem estado do aparelho ainda (firmware antigo não manda o quadro de estado).";
+}
+
+/* ------------------------------ medidas na tela ------------------------------ */
+function updateMeas() {
+  if (!meas) return;
+  for (const tr of measBody.rows) {
+    const k = tr.dataset.k, fmt = MEAS.find(m => m[0] === k)[2];
+    tr.cells[1].textContent = fmtMeas(meas, k, fmt);
+    if (ui.stats) {
+      const s = stats.acc[k];
+      tr.cells[2].textContent = s ? fmt(s.min) : "—";
+      tr.cells[3].textContent = s ? fmt(s.sum / s.c) : "—";
+      tr.cells[4].textContent = s ? fmt(s.max) : "—";
+    }
+  }
+  els.statsN.textContent = stats.n;
+  const a = view && view.a;
+  els.warn.textContent = a && a.sat ? "⚠ Sinal saturado no amplificador: aumente o V/div para medir certo."
+    : (a && meas.pp < 0.5 * a.vdiv && a.vdiv > VDIV[0] * a.probe) ? "Dica: o sinal ocupa menos de meia divisão; diminua o V/div para ter mais resolução." : "";
+}
+
+function cursorValues() {
+  if (!view) return null;
+  const c = ui.cur, span = view.tdiv * DIVX;
+  const t1 = view.tLeft + c.t1 * span, t2 = view.tLeft + c.t2 * span;
+  const vOf = fy => ((0.5 - fy) * DIVY - view.pos) * view.vdiv;
+  const v1 = vOf(c.v1), v2 = vOf(c.v2);
+  // valor do traço sob cada cursor de tempo
+  const at = t => { const tr = view.traces[view.traces.length - 1]; const k = Math.round((t - tr.t0) / tr.dt);
+    return k >= 0 && k < tr.count ? tr.v[tr.from + k] : null; };
+  return { t1, t2, dt: t2 - t1, v1, v2, dv: v1 - v2, y1: at(t1), y2: at(t2) };
+}
+function updateCursorBar() {
+  els.curBar.style.display = ui.cursors ? "block" : "none";
+  if (!ui.cursors) return;
+  const c = cursorValues(); if (!c) return;
+  const items = [["t1", fmtT(c.t1)], ["t2", fmtT(c.t2)], ["Δt", fmtT(c.dt)], ["1/Δt", c.dt ? fmtF(1 / Math.abs(c.dt)) : "—"],
+                 ["V1", fmtV(c.v1)], ["V2", fmtV(c.v2)], ["ΔV", fmtV(c.dv)], ["traço em t1 / t2", `${fmtV(c.y1)} / ${fmtV(c.y2)}`]];
+  els.curGrid.innerHTML = items.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+}
+function updateFftInfo() {
+  els.fftBox.style.display = ui.fft ? "block" : "none";
+  els.btnFftPhoto.disabled = !ui.fft;
+  if (!ui.fft) return;
+  const s = spec;
+  if (!s) { els.fftInfo.innerHTML = `<div><div class="k">Espectro</div><div class="v">precisa de 64 amostras ou mais</div></div>`; return; }
+  const items = [["Fundamental", s.strong ? fmtF(s.f1) : "—"], ["Amplitude (pico)", s.strong ? fmtV(s.A1) : "—"],
+                 ["Nível", s.strong ? fmtDb(20 * Math.log10(s.A1 / Math.SQRT2)) : "—"], ["THD (até a 10.ª)", s.strong ? fmtP(s.thd) : "—"],
+                 ["Resolução", fmtF(s.df, 3)], ["Pontos", s.N]];
+  if (s.strong) for (const hm of s.harm.slice(0, 4)) items.push([`${hm.h}.ª harmônica`, `${fmtV(hm.A)} (${nf(20 * Math.log10(hm.A / s.A1 + 1e-12), 3)} dBc)`]);
+  els.fftInfo.innerHTML = items.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+}
+
+/* ------------------------------ tela ao vivo ------------------------------ */
+function themedView(v, th) {
+  if (!v) return null;
+  return { ...v, cursors: ui.cursors ? ui.cur : null,
+    traces: v.traces.map(t => ({ ...t, color: t.color === "TRACE" ? th.trace : t.color === "REF" ? th.ref : t.color })) };
+}
+const liveLayout = () => {
+  const dpr = window.devicePixelRatio || 1, cv = els.live;
   const W = Math.round(cv.clientWidth * dpr), H = Math.round(cv.clientHeight * dpr);
+  return { dpr, W, H, L: { x: 64 * dpr, y: 14 * dpr, w: W - 84 * dpr, h: H - 44 * dpr, font: 13 * dpr, lw: 1.6 * dpr,
+                            labels: true, every: W < 700 * dpr ? 2 : 1 } };
+};
+function drawLive() {
+  const cv = els.live, { dpr, W, H, L } = liveLayout();
   if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
   const ctx = cv.getContext("2d"), th = THEMES.escuro;
   ctx.fillStyle = th.bg; ctx.fillRect(0, 0, W, H);
-  const f = 13 * dpr, L = { x: 64 * dpr, y: 14 * dpr, w: W - 84 * dpr, h: H - 44 * dpr, font: f, lw: 1.6 * dpr,
-                            labels: true, every: W < 700 * dpr ? 2 : 1 };
-  drawScope(ctx, analysis, L, th, +els.rngPos.value);
-  if (analysis) {
-    ctx.fillStyle = "#ffd400"; ctx.font = `600 ${f}px "Segoe UI", system-ui, sans-serif`;
-    ctx.textAlign = "left"; ctx.textBaseline = "top";
-    ctx.fillText(`${fmtV(analysis.vdiv)}/div   ${fmtT(analysis.tdiv)}/div   ${analysis.f.ac ? "AC" : "DC"}`, L.x + 8 * dpr, L.y + 6 * dpr);
-    if (!running) { ctx.fillStyle = "#ff5a5a"; ctx.textAlign = "right"; ctx.fillText("PARADO", L.x + L.w - 8 * dpr, L.y + 6 * dpr); }
+  // sem quadro ainda: grade com a escala do aparelho
+  const v = view ? { ...view, pos: dev.posPx / PX_DIV, trigV: dev.trigPx / PX_DIV * view.vdiv } : null;
+  drawScope(ctx, themedView(v, th), L, th);
+  const f = 13 * dpr;
+  ctx.font = `600 ${f}px ${FONT}`; ctx.textBaseline = "top";
+  if (view) {
+    ctx.fillStyle = th.trace; ctx.textAlign = "left";
+    const acq = acqMode === "avg" ? ` · média ${histBuf.length}/${els.selAvg.value}` : acqMode === "persist" ? " · persistência" : "";
+    ctx.fillText(`${fmtV(view.vdiv)}/div   ${fmtT(view.tdiv)}/div   ${shown.ac ? "AC" : "DC"}${acq}`, L.x + 8 * dpr, L.y + 6 * dpr);
+    if (reference) { ctx.fillStyle = th.ref; ctx.fillText(`ref: ${reference.label}`, L.x + 8 * dpr, L.y + 24 * dpr); }
+    const stopped = !dev.running, wait = dev.mode !== 0 && webWaiting && dev.running;
+    if (stopped || wait) { ctx.fillStyle = stopped ? "#ff5a5a" : "#ffb020"; ctx.textAlign = "right";
+      ctx.fillText(stopped ? "PARADO" : "ESPERANDO TRIGGER", L.x + L.w - 8 * dpr, L.y + 6 * dpr); }
   } else {
-    ctx.fillStyle = "#9a9a9a"; ctx.font = `${16 * dpr}px "Segoe UI", system-ui, sans-serif`;
+    ctx.fillStyle = "#9a9a9a"; ctx.font = `${16 * dpr}px ${FONT}`;
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText("Clique em “Conectar” e escolha o DSO152 (ou use o Demo)", W / 2, H / 2);
   }
 }
+function drawFftLive() {
+  if (!ui.fft) return;
+  const cv = els.fft, dpr = window.devicePixelRatio || 1;
+  const W = Math.round(cv.clientWidth * dpr), H = Math.round(cv.clientHeight * dpr);
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  const ctx = cv.getContext("2d"), th = THEMES.escuro;
+  ctx.fillStyle = th.bg; ctx.fillRect(0, 0, W, H);
+  drawSpectrum(ctx, spec, { x: 70 * dpr, y: 10 * dpr, w: W - 90 * dpr, h: H - 36 * dpr, font: 12 * dpr, lw: 1.3 * dpr }, th, fftMaxF());
+}
+const fftMaxF = () => spec ? (spec.strong ? Math.min(spec.rate / 2, spec.f1 * 11) : spec.rate / 2) : null;
 
 function loop() {
   const now = performance.now();
   if (now - fpsT > 1000) {
-    if (port) setStatus(`Conectado · ${Math.round(frames * 1000 / (now - fpsT))} quadros/s`, "ok");
-    else if (demoTimer) setStatus(`Demo · ${Math.round(frames * 1000 / (now - fpsT))} quadros/s`, "demo");
+    const fps = Math.round(frames * 1000 / (now - fpsT));
+    if (port) setStatus(`Conectado · ${fps} quadros/s`, "ok");
+    else if (demoTimer) setStatus(`Demo · ${fps} quadros/s`, "demo");
     frames = 0; fpsT = now;
+    syncControls();
   }
-  if (dirty && lastFrame) {
-    if (running) shown = lastFrame;
-    analysis = analyze(shown, +els.selProbe.value, els.selTrig.value);
-    updateMeas(analysis); syncControls(shown); dirty = false; drawLive();
-  } else if (dirty) { drawLive(); dirty = false; }
+  if (dirty) {
+    dirty = false;
+    drawLive(); updateMeas(); updateCursorBar(); updateFftInfo(); drawFftLive();
+  }
   requestAnimationFrame(loop);
 }
 new ResizeObserver(() => { dirty = true; }).observe(els.live);
+new ResizeObserver(() => { dirty = true; }).observe(els.fft);
 
 /* ------------------------------ porta serial ------------------------------ */
 const enc = new TextEncoder();
 const parser = new FrameParser();
 let port = null, reader = null, writer = null, demoTimer = null;
+let sendChain = Promise.resolve();
 
-async function send(cmd) {
+// manda um comando e já aplica no estado local (o quadro de estado confirma depois)
+function send(cmd) {
+  applyLocal(cmd);
   if (demoTimer) { demo.apply(cmd); return; }
   if (!writer) return;
-  try { await writer.write(enc.encode(cmd + "\n")); } catch { /* porta caiu */ }
+  sendChain = sendChain.then(() => writer.write(enc.encode(cmd + "\n"))).catch(() => {});
+}
+function applyLocal(cmd) {
+  const c = cmd[0], v = +cmd.slice(1);
+  if (c === "G") dev.gain = v; else if (c === "C") dev.ac = v === DC_LEVEL ? 0 : 1;
+  else if (c === "B") { dev.tb = v; dev.rateReq = dev.rate = Math.round(SPD / TDIVS[v]); }
+  else if (c === "R") { dev.tb = -1; dev.rateReq = v; }
+  else if (c === "T") { dev.mode = v; dev.running = 1; } else if (c === "E") dev.falling = v;
+  else if (c === "L") dev.trigPx = v; else if (c === "P") dev.posPx = v; else if (c === "S") dev.running = v;
+  else if (c === "N") dev.n = v;
+  dirty = true; syncControls();
+  if (view && (c === "P" || c === "L" || c === "E")) {                  // traço parado acompanha
+    if (c !== "P") reprocess();
+  }
 }
 
 async function openPort(p) {
@@ -486,6 +937,7 @@ async function openPort(p) {
   } catch (e) { setStatus("Não abriu a porta (feche o plot.py?)", "bad"); return; }
   port = p; writer = p.writable.getWriter();
   els.btnConnect.textContent = "Desconectar"; setStatus("Conectado", "ok");
+  dev.known = false; send("Q");
   try {
     reader = p.readable.getReader();
     for (;;) {
@@ -506,6 +958,7 @@ async function closePort() {
   reader = writer = null;
   els.btnConnect.textContent = "🔌 Conectar";
   if (!demoTimer) setStatus("Desconectado");
+  syncControls();
 }
 
 els.btnConnect.onclick = async () => {
@@ -527,95 +980,387 @@ if ("serial" in navigator) {
 }
 
 /* ------------------------------ demo ------------------------------ */
-// gera frames iguais aos do firmware (passam pelo mesmo parser): quadrada de
-// calibração de 1 kHz, 0 a 3,3 V, com um pouco de ruído e de oscilação na borda
+// simula o aparelho: gera quadros de dados e de estado iguais aos do firmware
+// (passam pelo mesmo parser) e obedece aos mesmos comandos
 const demo = {
-  gain: 6, rate: 50000, ac: 0, t: 0,
+  st: { gain: 6, ac: 0, mode: 0, falling: 0, running: 1, waiting: 0, cal: 0, zflash: 1, tb: 3, trigPx: 12, posPx: 0,
+        rateReq: 50000, rate: 50000, n: 600, sel: 0, calRes: -1 },
+  t: 0, pending: [], calUntil: 0,
+  signal(t) {
+    switch (els.selDemo.value) {
+      case "sine": { const w = 2 * Math.PI * 1200 * t; return 2.4 * Math.sin(w) + 0.05 * Math.sin(3 * w) + 0.02 * Math.sin(5 * w); }
+      case "pwm":  { const ph = (t * 736.6) % 1; return ph < 0.217 ? 3.05 : -3.35; }
+      case "tri":  { const ph = (t * 152.9) % 1; return ph < 0.5 ? -2.95 + 11.8 * ph : 2.95 - 11.8 * (ph - 0.5); }
+      default: {
+        const ph = (t * 1000) % 1, edge = ph < 0.5 ? ph : ph - 0.5;
+        return (ph < 0.5 ? 3.3 : 0) + (ph < 0.5 ? -1 : 1) * 0.25 * Math.exp(-edge * 40) * Math.cos(edge * 2 * Math.PI * 9);
+      }
+    }
+  },
   apply(cmd) {
-    const v = +cmd.slice(1);
-    if (cmd[0] === "G") this.gain = Math.max(0, Math.min(10, v));
-    if (cmd[0] === "R") this.rate = Math.max(10, Math.min(800000, v));
-    if (cmd[0] === "C") this.ac = v === DC_LEVEL ? 0 : 1;
+    const s = this.st, c = cmd[0], v = +cmd.slice(1);
+    if (c === "G") s.gain = clamp(v, 0, 10);
+    else if (c === "B") { s.tb = clamp(v, 0, 10); s.rateReq = s.rate = Math.round(SPD / TDIVS[s.tb]); }
+    else if (c === "R") { s.tb = -1; s.rateReq = clamp(v, 10, 800000); s.rate = Math.round(72e6 / Math.round(72e6 / s.rateReq)); }
+    else if (c === "N") { if (v >= 16 && v <= 2048) s.n = v; }
+    else if (c === "C") s.ac = v === DC_LEVEL ? 0 : 1;
+    else if (c === "T") { s.mode = clamp(v, 0, 2); s.running = 1; }
+    else if (c === "E") s.falling = v ? 1 : 0;
+    else if (c === "L") s.trigPx = clamp(v, -POS_MAX, POS_MAX);
+    else if (c === "P") s.posPx = clamp(v, -POS_MAX, POS_MAX);
+    else if (c === "S") s.running = v ? 1 : 0;
+    else if (c === "A") { const vd = VDIV[s.gain]; let lo = 1e9, hi = -1e9;
+      for (let k = 0; k < 400; k++) { const x = this.signal(this.t + k * 2e-5); lo = Math.min(lo, x); hi = Math.max(hi, x); }
+      s.trigPx = clamp(Math.round((lo + hi) / 2 / vd * PX_DIV), -POS_MAX, POS_MAX); }
+    else if (c === "D") Object.assign(s, { gain: 6, ac: 0, mode: 0, falling: 0, running: 1, tb: 3, trigPx: 12, posPx: 0, rateReq: 50000, rate: 50000 });
+    else if (c === "Z") { s.cal = 2; this.calUntil = performance.now() + 2500; }
+    this.pending.push(buildStatus(s));
   },
   frame() {
-    const n = 600, zero = 2090, cpv = CPV[this.gain];
+    const s = this.st, out = [];
+    if (this.pending.length) { out.push(...this.pending); this.pending = []; }
+    if (s.cal && performance.now() > this.calUntil) { s.cal = 0; s.calRes = 0; s.zflash = 1; out.push(buildStatus(s)); }
+    if (!s.running || s.cal) return out;
+    const n = s.n, zero = 2090, cpv = CPV[s.gain];
     const b = new Uint8Array(HDR + 2 * n + 1), dv = new DataView(b.buffer);
-    b[0] = 0xA5; b[1] = 0x5A; dv.setUint16(2, n, true); b[4] = this.gain | (this.ac ? 0x80 : 0);
-    dv.setUint32(5, this.rate, true); dv.setInt16(9, zero, true);
+    b[0] = 0xA5; b[1] = 0x5A; dv.setUint16(2, n, true); b[4] = s.gain | (s.ac ? 0x80 : 0);
+    dv.setUint32(5, s.rate, true); dv.setInt16(9, zero, true);
+    let mean = 0;
+    if (s.ac) { for (let k = 0; k < 2000; k++) mean += this.signal(k * 1e-5) / 2000; }
     for (let k = 0; k < n; k++) {
-      const t = this.t + k / this.rate, ph = (t * 1000) % 1;
-      const edge = ph < 0.5 ? ph : ph - 0.5;
-      let volts = (ph < 0.5 ? 3.3 : 0) + (ph < 0.5 ? -1 : 1) * 0.25 * Math.exp(-edge * 40) * Math.cos(edge * 2 * Math.PI * 9);
-      if (this.ac) volts -= 1.65;
-      volts += (Math.random() - 0.5) * 0.02;
-      const s = Math.max(0, Math.min(3805, Math.round(zero + volts * cpv)));
-      dv.setUint16(HDR + 2 * k, s, true);
+      let volts = this.signal(this.t + k / s.rate) - mean;
+      volts += (Math.random() - 0.5) * 0.02 + (Math.random() - 0.5) * 4 / cpv;   // ruído + ~2 contagens
+      const sm = Math.max(0, Math.min(3805, Math.round(zero + volts * cpv)));
+      dv.setUint16(HDR + 2 * k, sm, true);
     }
     b[b.length - 1] = crc8(b, 2, b.length - 1);
-    this.t += 0.0371;
-    return b;
+    this.t += 0.0371 + Math.random() * 0.01;
+    if (s.mode === 2) { s.running = 0; this.pending.push(buildStatus(s)); }    // ÚNICO: um disparo e para
+    out.push(b);
+    return out;
   },
 };
-function stopDemo() { if (demoTimer) { clearInterval(demoTimer); demoTimer = null; els.btnDemo.textContent = "Demo"; } }
+function stopDemo() {
+  if (demoTimer) { clearInterval(demoTimer); demoTimer = null; els.btnDemo.textContent = "Demo"; els.demoRow.style.display = "none"; }
+}
 els.btnDemo.onclick = async () => {
-  if (demoTimer) { stopDemo(); setStatus(port ? "Conectado" : "Desconectado", port ? "ok" : ""); return; }
+  if (demoTimer) { stopDemo(); setStatus(port ? "Conectado" : "Desconectado", port ? "ok" : ""); syncControls(); return; }
   if (port) await closePort();
-  demoTimer = setInterval(() => { for (const f of parser.feed(demo.frame())) onFrame(f); }, 40);
-  els.btnDemo.textContent = "Parar demo"; setStatus("Demo", "demo");
+  demo.pending.push(buildStatus(demo.st));
+  let lastStatus = 0;
+  demoTimer = setInterval(() => {
+    const now = performance.now();
+    if (now - lastStatus > 1000) { demo.pending.push(buildStatus(demo.st)); lastStatus = now; }
+    for (const chunk of demo.frame()) for (const f of parser.feed(chunk)) onFrame(f);
+  }, 40);
+  els.btnDemo.textContent = "Parar demo"; els.demoRow.style.display = "inline"; setStatus("Demo", "demo");
 };
+els.selDemo.onchange = () => { histBuf = []; stats.key = ""; };
 
 /* ------------------------------ controles ------------------------------ */
+const sliding = { pos: false, lvl: false };
 els.selVdiv.onchange = () => send("G" + els.selVdiv.value);
-els.selTdiv.onchange = () => { if (els.selTdiv.value !== "x") send("R" + Math.round(SPD / TDIVS[+els.selTdiv.value])); };
-els.selCpl.onchange = () => send("C" + (els.selCpl.value === "dc" ? DC_LEVEL : 1 - DC_LEVEL));
-els.selTrig.onchange = () => { savePref("trig", els.selTrig.value); dirty = true; };
-els.selProbe.onchange = () => { savePref("probe", els.selProbe.value); dirty = true; };
-els.selTheme.onchange = () => savePref("theme", els.selTheme.value);
-els.rngPos.oninput = () => { dirty = true; };
-els.rngPos.ondblclick = () => { els.rngPos.value = 0; dirty = true; };
-
-function toggleRun() {
-  running = !running; dirty = true;
-  els.btnRun.textContent = running ? "⏸ Parar" : "▶ Rodar";
-  els.btnRun.classList.toggle("stopped", !running);
+els.selTdiv.onchange = () => {
+  if (els.selTdiv.value === "x") { els.inRate.focus(); return; }
+  send("B" + els.selTdiv.value);
+};
+els.btnRate.onclick = () => {
+  const r = Math.round(+els.inRate.value);
+  if (!(r >= 10 && r <= 800000)) { toast("Taxa entre 10 e 800 000 amostras/s", true); return; }
+  send("R" + r);
+};
+els.inRate.onkeydown = e => { if (e.key === "Enter") els.btnRate.click(); };
+els.selN.onchange = () => send("N" + els.selN.value);
+segOn(els.segCpl, v => send("C" + (v === "dc" ? DC_LEVEL : 1 - DC_LEVEL)));
+segOn(els.segMode, v => send("T" + v));
+segOn(els.segEdge, v => send("E" + v));
+function sliderSender(el, key, cmd) {
+  let timer = null;
+  const fire = () => { timer = null; send(cmd + Math.round(clamp(+el.value * PX_DIV, -POS_MAX, POS_MAX))); };
+  el.addEventListener("pointerdown", () => { sliding[key] = true; });
+  el.addEventListener("input", () => {
+    sliding[key] = true;
+    const vd = curVdiv(), px = Math.round(+el.value * PX_DIV);
+    if (key === "pos") { dev.posPx = px; els.valPos.textContent = fmtV(px / PX_DIV * vd); }
+    else { dev.trigPx = px; els.valLvl.textContent = fmtV(px / PX_DIV * vd); reprocess(); }
+    dirty = true;
+    if (!timer) timer = setTimeout(fire, 60);              // no máximo ~16 comandos por segundo
+  });
+  el.addEventListener("change", () => { sliding[key] = false; fire(); });
+  el.addEventListener("dblclick", () => { el.value = 0; sliding[key] = false; fire(); });
 }
+sliderSender(els.rngPos, "pos", "P");
+sliderSender(els.rngLvl, "lvl", "L");
+els.selProbe.onchange = () => { savePref("probe", els.selProbe.value); reprocess(); syncControls(); };
+els.selTheme.onchange = () => savePref("theme", els.selTheme.value);
+els.chkFull.onchange = () => { savePref("full", els.chkFull.checked ? "1" : "0"); reprocess(); };
+segOn(els.segAcq, v => { acqMode = v; savePref("acq", v); setSeg(els.segAcq, v); histBuf = []; reprocess(); });
+setSeg(els.segAcq, acqMode);
+els.selAvg.onchange = () => { savePref("avg", els.selAvg.value); histBuf = []; };
+
+function toggleRun() { send("S" + (dev.running ? 0 : 1)); }
+function single() { send("T2"); send("S1"); }
 els.btnRun.onclick = toggleRun;
+els.btnSingle.onclick = single;
+els.btnSingle2.onclick = single;
+els.btnMid.onclick = () => {
+  if (!port && !demoTimer && meas) { send("L" + Math.round((meas.max + meas.min) / 2 / curVdiv() * PX_DIV)); return; }
+  send("A");
+};
+els.btnDefaults.onclick = () => { if (confirm("Voltar tudo ao padrão (1 V/div, 500 µs/div, DC, trigger automático)?")) send("D"); };
+els.btnZero.onclick = () => {
+  if (!port && !demoTimer) { toast("Conecte o aparelho primeiro", true); return; }
+  if (!confirm("Calibração do zero\n\nEncoste a ponta no jacaré (0 V na entrada) e clique em OK.\n"
+             + "O aparelho mede as 11 faixas em DC e em AC (~5 s) e grava na flash.")) return;
+  send("Z"); toast("Medindo os zeros… não mexa na ponta");
+};
+
+els.btnCursors.onclick = () => { ui.cursors = !ui.cursors; els.btnCursors.classList.toggle("on", ui.cursors); dirty = true; };
+els.btnFft.onclick = () => { ui.fft = !ui.fft; els.btnFft.classList.toggle("on", ui.fft); reprocess(); dirty = true; };
+els.btnStats.onclick = () => { ui.stats = !ui.stats; els.btnStats.classList.toggle("on", ui.stats);
+  els.tblMeas.classList.toggle("nostats", !ui.stats); els.statsHint.style.display = ui.stats ? "block" : "none"; dirty = true; };
+els.lnkStatsReset.onclick = e => { e.preventDefault(); stats.key = ""; stats.n = 0; stats.acc = {}; dirty = true; };
+els.btnRef.onclick = () => {
+  if (!view) { toast("Ainda não há forma de onda", true); return; }
+  const tr = view.traces[view.traces.length - 1];
+  reference = { v: Float32Array.from(tr.v.subarray(tr.from, tr.from + tr.count)), t0: tr.t0, dt: tr.dt,
+                label: `${fmtV(view.vdiv)}/div, ${fmtT(view.tdiv)}/div, ${new Date().toLocaleTimeString("pt-BR")}` };
+  els.btnRefClear.disabled = false; reprocess(); toast("Referência guardada");
+};
+els.btnRefClear.onclick = () => { reference = null; els.btnRefClear.disabled = true; reprocess(); };
 
 els.fileCal.onchange = async () => {
   const file = els.fileCal.files[0]; if (!file) return;
   try {
     const cal = JSON.parse(await file.text()), next = CPV_MEDIDO.slice();
     for (const r of cal.ranges || []) if (r.cpv) next[r.gain] = r.cpv;
-    CPV = next; savePref("cpv", JSON.stringify(CPV)); dirty = true;
+    CPV = next; savePref("cpv", JSON.stringify(CPV)); els.calSrc.textContent = file.name;
+    reprocess();
     toast("Calibração carregada");
   } catch { toast("Arquivo de calibração inválido", true); }
   els.fileCal.value = "";
 };
 
+/* cursores: arrastar no gráfico */
+(() => {
+  let drag = null;
+  const hit = e => {
+    const r = els.live.getBoundingClientRect(), { dpr, L } = liveLayout();
+    const fx = ((e.clientX - r.left) * dpr - L.x) / L.w, fy = ((e.clientY - r.top) * dpr - L.y) / L.h;
+    return { fx, fy, tolX: 8 * dpr / L.w, tolY: 8 * dpr / L.h };
+  };
+  const nearest = h => {
+    let best = null, d = Infinity;
+    for (const k of ["t1", "t2"]) { const dd = Math.abs(ui.cur[k] - h.fx) / h.tolX; if (dd < 1 && dd < d) { d = dd; best = k; } }
+    for (const k of ["v1", "v2"]) { const dd = Math.abs(ui.cur[k] - h.fy) / h.tolY; if (dd < 1 && dd < d) { d = dd; best = k; } }
+    return best;
+  };
+  els.live.addEventListener("pointerdown", e => {
+    if (!ui.cursors) return;
+    const k = nearest(hit(e)); if (!k) return;
+    drag = k; els.live.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  els.live.addEventListener("pointermove", e => {
+    if (!ui.cursors) return;
+    const h = hit(e);
+    if (drag) { ui.cur[drag] = clamp(drag[0] === "t" ? h.fx : h.fy, 0, 1); dirty = true; }
+    else { const k = nearest(h); els.live.style.cursor = k ? (k[0] === "t" ? "ew-resize" : "ns-resize") : "default"; }
+  });
+  els.live.addEventListener("pointerup", () => { drag = null; });
+  els.live.addEventListener("dblclick", e => {
+    if (!ui.cursors) return;
+    const h = hit(e); if (h.fx < 0 || h.fx > 1 || h.fy < 0 || h.fy > 1) return;
+    // move o cursor de tempo mais perto e o de tensão mais perto para o ponto
+    const kt = Math.abs(ui.cur.t1 - h.fx) < Math.abs(ui.cur.t2 - h.fx) ? "t1" : "t2";
+    const kv = Math.abs(ui.cur.v1 - h.fy) < Math.abs(ui.cur.v2 - h.fy) ? "v1" : "v2";
+    ui.cur[kt] = h.fx; ui.cur[kv] = h.fy; dirty = true;
+  });
+})();
+
+/* ------------------------------ ajuste automático ------------------------------ */
+const waiters = new Set();
+function nextFrames(count, timeout = 2500) {
+  return new Promise(resolve => {
+    let got = 0, last = null;
+    const w = f => { last = f; if (++got >= count) { waiters.delete(w); clearTimeout(t); resolve(last); } };
+    const t = setTimeout(() => { waiters.delete(w); resolve(last); }, timeout);
+    waiters.add(w);
+  });
+}
+async function settle(cmds) { for (const c of cmds) send(c); return nextFrames(3); }
+function quick(f) {                                        // Vmín/Vmáx na ponta (1X) e frequência de um quadro cru
+  if (!f) return null;
+  const a = analyze(f, { probe: 1, trigPx: 0, falling: 0, full: true });
+  const m = measure(a.v, f.rate);
+  return { lo: a.lo, hi: a.hi, sat: a.sat, freq: m.freq, period: m.period, pp: m.pp };
+}
+let autosetBusy = false;
+async function autoset() {
+  if (!port && !demoTimer) { toast("Conecte o aparelho (ou ligue o Demo) primeiro", true); return; }
+  if (autosetBusy) return;
+  autosetBusy = true; els.btnAutoset.disabled = true; toast("Ajustando…");
+  try {
+    // 1) escala grossa, trigger automático, posição no meio
+    let q = quick(await settle(["T0", "S1", "P0", "G9", "B4"]));
+    if (!q) throw new Error("sem quadros");
+    // 2) V/div: a menor faixa em que o sinal cabe em ±3,5 divisões (duas passadas)
+    for (let pass = 0; pass < 2; pass++) {
+      const peak = Math.max(Math.abs(q.hi), Math.abs(q.lo), 1e-3);
+      let g = VDIV.findIndex(vd => peak <= 3.5 * vd);
+      if (g < 0) g = 10;
+      q = quick(await settle(["G" + g]));
+      if (q && q.sat && g < 10) q = quick(await settle(["G" + (g + 1)]));
+    }
+    // 3) t/div: procura bordas em bases diferentes e deixa ~2,5 períodos na tela
+    let per = q && q.period;
+    for (const tb of [4, 1, 7, 10]) {
+      if (per) break;
+      q = quick(await settle(["B" + tb])); per = q && q.period;
+    }
+    if (per) {
+      const want = 2.5 * per / DIVX;
+      let i = TDIVS.findIndex(t => t >= want); if (i < 0) i = TDIVS.length - 1;
+      await settle(["B" + i]);
+    }
+    send("A");
+    toast(per ? `Ajustado: ${fmtF(1 / per)}` : "Ajustado (sem período detectado)");
+  } catch (e) { toast("Ajuste automático falhou: " + e.message, true); }
+  finally { autosetBusy = false; els.btnAutoset.disabled = false; }
+}
+els.btnAutoset.onclick = autoset;
+
 /* ------------------------------ foto / CSV ------------------------------ */
-function baseName(when) {
+function settingsLine(v) {
+  const a = v.a;
+  return `${fmtV(v.vdiv)}/div · ${fmtT(v.tdiv)}/div · ${a.f.ac ? "AC" : "DC"} · ponta ${a.probe}X · ${nf(a.rate, 4)} amostras/s`
+       + (a.trig >= 0 ? ` · trigger na ${dev.falling ? "descida" : "subida"} em ${fmtV(a.level)}` : " · sem trigger")
+       + (acqMode === "avg" && histBuf.length > 1 ? ` · média de ${histBuf.length}` : "");
+}
+function photoMeasRows() {
+  const keys = ["pp", "max", "min", "mean", "rms", "freq", "period", "duty"];
+  if (meas && meas.amp != null) keys.splice(3, 0, "amp");
+  if (meas && meas.rise != null) keys.push("rise");
+  return keys.map(k => { const m = MEAS.find(x => x[0] === k); return [m[1], fmtMeas(meas, k, m[2])]; });
+}
+
+/* foto: 1600x1040, cabeçalho, grade com eixos, medidas e cursores */
+function renderPhoto(themeName, title, note, when) {
+  const th = THEMES[themeName], W = 1600, H = 1040;
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = th.bg; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = th.head; ctx.font = `600 34px ${FONT}`; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+  ctx.fillText(title || "Forma de onda — DSO152", 60, 62);
+  ctx.fillStyle = th.muted; ctx.font = `20px ${FONT}`;
+  ctx.fillText(`${stamp(when)}   ·   ${settingsLine(view)}`, 60, 98);
+
+  const P = { x: 150, y: 130, w: 1140, h: 760, font: 22, lw: 3, labels: true };
+  drawScope(ctx, themedView({ ...view, pos: dev.posPx / PX_DIV }, th), P, th);
+  ctx.fillStyle = th.muted; ctx.font = `20px ${FONT}`; ctx.textAlign = "center";
+  ctx.fillText(view.a.trig >= 0 ? "tempo (0 = trigger)" : "tempo", P.x + P.w / 2, P.y + P.h + 62);
+  ctx.save(); ctx.translate(40, P.y + P.h / 2); ctx.rotate(-Math.PI / 2);
+  ctx.fillText(`tensão na ponta (${view.a.probe}X)`, 0, 0); ctx.restore();
+
+  // tabela de medidas (e dos cursores)
+  const mx = 1325, my = 130, mw = 245;
+  let rows = photoMeasRows(), boxH = 70 + rows.length * 40;
+  ctx.fillStyle = th.panel; ctx.fillRect(mx, my, mw, boxH);
+  ctx.fillStyle = th.head; ctx.font = `600 22px ${FONT}`; ctx.textAlign = "left";
+  ctx.fillText("Medidas", mx + 18, my + 40);
+  let ry = my + 80;
+  const put = (k, val, color) => {
+    ctx.fillStyle = th.muted; ctx.font = `18px ${FONT}`; ctx.textAlign = "left"; ctx.fillText(k, mx + 18, ry);
+    ctx.fillStyle = color || th.text; ctx.font = `600 19px ${FONT}`; ctx.textAlign = "right"; ctx.fillText(val, mx + mw - 18, ry);
+    ry += 40;
+  };
+  for (const [k, val] of rows) put(k, val);
+  ry = my + boxH + 20;
+  if (ui.cursors) {
+    const cv = cursorValues();
+    ctx.fillStyle = th.panel; ctx.fillRect(mx, ry, mw, 70 + 5 * 40);
+    ctx.fillStyle = th.head; ctx.font = `600 22px ${FONT}`; ctx.textAlign = "left"; ctx.fillText("Cursores", mx + 18, ry + 40);
+    ry += 80;
+    put("Δt", fmtT(cv.dt), th.cur); put("1/Δt", cv.dt ? fmtF(1 / Math.abs(cv.dt)) : "—", th.cur);
+    put("V1", fmtV(cv.v1), th.curH); put("V2", fmtV(cv.v2), th.curH); put("ΔV", fmtV(cv.dv), th.curH);
+    ry += 10;
+  }
+  if (view.a.sat) {
+    ctx.fillStyle = THEMES.claro.trig; ctx.font = `600 18px ${FONT}`; ctx.textAlign = "left";
+    ctx.fillText("⚠ sinal saturado:", mx, ry + 10); ctx.fillText("aumente o V/div", mx, ry + 34);
+  }
+  if (reference) {
+    ctx.fillStyle = th.ref; ctx.font = `18px ${FONT}`; ctx.textAlign = "left";
+    ctx.fillText(`— referência (${reference.label})`, P.x, P.y + P.h + 92);
+  }
+
+  ctx.textAlign = "left"; ctx.fillStyle = th.text; ctx.font = `20px ${FONT}`;
+  if (note) wrapText(ctx, note, 60, reference ? 1010 : 990, 1200, 26);
+  ctx.fillStyle = th.muted; ctx.font = `16px ${FONT}`; ctx.textAlign = "right";
+  ctx.fillText("FNIRSI DSO152 · firmware customizado", W - 30, H - 20);
+  return c;
+}
+function renderSpectrumPhoto(themeName, title, note, when) {
+  const th = THEMES[themeName], W = 1600, H = 900;
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = th.bg; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = th.head; ctx.font = `600 34px ${FONT}`; ctx.textAlign = "left";
+  ctx.fillText((title || "Espectro") + (title ? " — espectro" : " — DSO152"), 60, 62);
+  ctx.fillStyle = th.muted; ctx.font = `20px ${FONT}`;
+  ctx.fillText(`${stamp(when)}   ·   ${nf(spec.rate, 4)} amostras/s · ${spec.N} pontos · janela de Hann · resolução ${fmtF(spec.df, 3)}`, 60, 98);
+  const P = { x: 150, y: 130, w: 1140, h: 620, font: 22, lw: 2.5 };
+  drawSpectrum(ctx, spec, P, th, fftMaxF());
+  ctx.fillStyle = th.muted; ctx.font = `20px ${FONT}`; ctx.textAlign = "center"; ctx.fillText("frequência", P.x + P.w / 2, P.y + P.h + 62);
+  const mx = 1325, my = 130, mw = 245;
+  const rows = spec.strong ? [["Fundamental", fmtF(spec.f1)], ["Amplitude", fmtV(spec.A1)], ["THD", fmtP(spec.thd)],
+    ...spec.harm.slice(0, 5).map(hm => [`${hm.h}.ª harm.`, nf(20 * Math.log10(hm.A / spec.A1 + 1e-12), 3) + " dBc"])] : [["Sinal", "sem tom claro"]];
+  ctx.fillStyle = th.panel; ctx.fillRect(mx, my, mw, 70 + rows.length * 40);
+  ctx.fillStyle = th.head; ctx.font = `600 22px ${FONT}`; ctx.textAlign = "left"; ctx.fillText("Espectro", mx + 18, my + 40);
+  let ry = my + 80;
+  for (const [k, v] of rows) {
+    ctx.fillStyle = th.muted; ctx.font = `18px ${FONT}`; ctx.textAlign = "left"; ctx.fillText(k, mx + 18, ry);
+    ctx.fillStyle = th.text; ctx.font = `600 19px ${FONT}`; ctx.textAlign = "right"; ctx.fillText(v, mx + mw - 18, ry); ry += 40;
+  }
+  ctx.textAlign = "left"; ctx.fillStyle = th.text; ctx.font = `20px ${FONT}`;
+  if (note) wrapText(ctx, note, 60, 860, 1200, 26);
+  ctx.fillStyle = th.muted; ctx.font = `16px ${FONT}`; ctx.textAlign = "right"; ctx.fillText("FNIRSI DSO152 · firmware customizado", W - 30, H - 20);
+  return c;
+}
+function wrapText(ctx, text, x, y, maxW, lh) {
+  let line = "";
+  for (const word of text.split(/\s+/)) {
+    const t = line ? line + " " + word : word;
+    if (ctx.measureText(t).width > maxW && line) { ctx.fillText(line, x, y); y += lh; line = word; }
+    else line = t;
+  }
+  if (line) ctx.fillText(line, x, y);
+}
+
+function baseName(when, suffix = "") {
   const t = slug(els.inTitle.value);
-  return "dso152_" + fileStamp(when) + (t ? "_" + t : "");
+  return "dso152_" + fileStamp(when) + (t ? "_" + t : "") + suffix;
 }
 function download(url, name) {
   const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
 }
-function photoCanvas(when) {
-  if (!analysis) { toast("Ainda não há forma de onda", true); return null; }
-  return renderPhoto(analysis, els.selTheme.value, els.inTitle.value.trim(), els.inNote.value.trim(), when);
+function photoCanvas(when, kind = "wave") {
+  if (!view) { toast("Ainda não há forma de onda", true); return null; }
+  if (kind === "fft") {
+    if (!spec) { toast("Ligue o espectro primeiro", true); return null; }
+    return renderSpectrumPhoto(els.selTheme.value, els.inTitle.value.trim(), els.inNote.value.trim(), when);
+  }
+  return renderPhoto(els.selTheme.value, els.inTitle.value.trim(), els.inNote.value.trim(), when);
 }
-
-function savePhoto() {
-  const when = new Date(), c = photoCanvas(when); if (!c) return;
-  const name = baseName(when) + ".png";
+function savePhoto(kind = "wave") {
+  const when = new Date(), c = photoCanvas(when, kind); if (!c) return;
+  const name = baseName(when, kind === "fft" ? "_espectro" : "") + ".png";
   c.toBlob(blob => {
     const url = URL.createObjectURL(blob);
     download(url, name);
-    addToGallery(url, c, name, els.inTitle.value.trim() || fmtT(analysis.tdiv) + "/div");
+    addToGallery(url, c, name, (els.inTitle.value.trim() || fmtT(view.tdiv) + "/div") + (kind === "fft" ? " (FFT)" : ""));
     toast("Foto salva: " + name);
   }, "image/png");
 }
-
 async function copyPhoto() {
   const c = photoCanvas(new Date()); if (!c) return;
   try {
@@ -624,22 +1369,26 @@ async function copyPhoto() {
     toast("Imagem copiada: cole no Word/Docs com Ctrl+V");
   } catch { toast("O navegador não deixou copiar; use “Salvar foto”", true); }
 }
-
 function saveCsv() {
-  if (!analysis) { toast("Ainda não há forma de onda", true); return; }
-  const a = analysis, when = new Date(), dt = 1 / a.f.rate, t0 = a.trig >= 0 ? a.trig : 0;
+  if (!view) { toast("Ainda não há forma de onda", true); return; }
+  const a = view.a, when = new Date(), dt = 1 / a.rate;
   const num = x => x.toLocaleString("pt-BR", { useGrouping: false, maximumSignificantDigits: 7 });
-  const lines = ["tempo_s;tensao_V"];
-  for (let i = 0; i < a.n; i++) lines.push(num((i - t0) * dt) + ";" + num(a.v[i]));
+  const avg = acqMode === "avg" && histBuf.length > 1;
+  const lines = [avg ? `tempo_s;tensao_V;media_${histBuf.length}_quadros_V` : "tempo_s;tensao_V"];
+  const t0 = a.trig >= 0 ? a.trig : 0;
+  for (let i = 0; i < a.n; i++) {
+    let row = num((i - t0) * dt) + ";" + num(a.v[i]);
+    if (avg) { const k = i - a.start; row += ";" + (k >= 0 && k < view.disp.length ? num(view.disp[k]) : ""); }
+    lines.push(row);
+  }
   const url = URL.createObjectURL(new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv" }));
   download(url, baseName(when) + ".csv");
   toast("CSV salvo (separador ; e vírgula decimal)");
 }
-
 function addToGallery(url, canvas, name, label) {
   if (!addToGallery.used) { els.gallery.innerHTML = ""; addToGallery.used = true; }
-  const thumb = document.createElement("canvas"); thumb.width = 240; thumb.height = 156;
-  thumb.getContext("2d").drawImage(canvas, 0, 0, 240, 156);
+  const thumb = document.createElement("canvas"); thumb.width = 240; thumb.height = Math.round(240 * canvas.height / canvas.width);
+  thumb.getContext("2d").drawImage(canvas, 0, 0, thumb.width, thumb.height);
   const fig = document.createElement("figure");
   fig.title = name;
   fig.innerHTML = `<img src="${thumb.toDataURL()}" alt=""><figcaption></figcaption>`;
@@ -648,19 +1397,31 @@ function addToGallery(url, canvas, name, label) {
   els.gallery.prepend(fig);
 }
 
-els.btnPhoto.onclick = savePhoto;
+els.btnPhoto.onclick = () => savePhoto();
+els.btnFftPhoto.onclick = () => savePhoto("fft");
 els.btnCopy.onclick = copyPhoto;
 els.btnCsv.onclick = saveCsv;
+
 document.addEventListener("keydown", e => {
-  if (e.target.matches("input[type=text], textarea") || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.key === "p" || e.key === "P") { e.preventDefault(); savePhoto(); }
-  else if (e.key === "c" || e.key === "C") { e.preventDefault(); copyPhoto(); }
-  else if (e.key === " ") { e.preventDefault(); toggleRun(); }
+  const t = e.target;
+  if ((t instanceof Element && t.matches("input[type=text], input[type=number], textarea, select")) || e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  const act = { p: () => savePhoto(), c: copyPhoto, " ": toggleRun, s: single, a: autoset, m: () => els.btnMid.click(),
+                k: () => els.btnCursors.click(), f: () => els.btnFft.click(),
+                arrowup: () => { if (dev.gain < 10) send("G" + (dev.gain + 1)); },
+                arrowdown: () => { if (dev.gain > 0) send("G" + (dev.gain - 1)); },
+                arrowright: () => { const i = dev.tb >= 0 ? dev.tb : TDIVS.findIndex(t => t >= SPD / dev.rate); if (i < TDIVS.length - 1) send("B" + (i + 1)); },
+                arrowleft: () => { const i = dev.tb >= 0 ? dev.tb : TDIVS.findIndex(t => t >= SPD / dev.rate); if (i > 0) send("B" + (i - 1)); } }[k];
+  if (act) { e.preventDefault(); act(); }
 });
 
-// para conferir a foto sem baixar (usado nos testes)
-window.__dso152 = { renderPhoto: (theme = "claro") => photoCanvas(new Date()) && renderPhoto(analysis, theme, els.inTitle.value, els.inNote.value, new Date()) };
+// para testes: inspeciona o estado e gera as fotos sem baixar
+window.__dso152 = { dev, get view() { return view; }, get meas() { return meas; }, get spec() { return spec; },
+  renderPhoto: (theme = "claro") => view && renderPhoto(theme, els.inTitle.value, els.inNote.value, new Date()),
+  renderSpectrumPhoto: (theme = "claro") => spec && renderSpectrumPhoto(theme, els.inTitle.value, els.inNote.value, new Date()),
+  parseStatus, buildStatus, FrameParser, measure, spectrum, analyze, send };
 
+syncControls();
 requestAnimationFrame(loop);
 </script>
 </body>

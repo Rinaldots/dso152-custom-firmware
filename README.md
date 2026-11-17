@@ -56,7 +56,7 @@ dso152-hack/
 ├── tools/                  scripts de análise do .bin (capstone)
 ├── docs/                   manual do DSO152, só na cópia local (fora do git)
 └── pc/
-    ├── dso152.html         interface no navegador: ao vivo + fotos para relatório
+    ├── dso152.html         interface no navegador: controle completo, análise e fotos
     ├── abrir_dso152.bat    abre o dso152.html no Edge (dois cliques)
     ├── plot.py             plotter serial ao vivo, em volts (pyserial + matplotlib)
     ├── calibrate.py        mede as 11 faixas pelo borne de calibração
@@ -138,7 +138,7 @@ aperte o **furo de reset** para cair no DSO BOOT.
 Deu errado? Recupere pela SWD com o WCH-Link/ST-Link, ou regrave o firmware
 oficial (`DSO152_APP_V0.1.bin`, do site da FNIRSI) pelo DSO BOOT.
 
-## Fotos para relatório (no navegador)
+## Interface no navegador
 
 Dê dois cliques em **`pc/abrir_dso152.bat`** (ou abra `pc/dso152.html` no
 Chrome ou no Edge; o Firefox não tem Web Serial). Não precisa instalar nada.
@@ -149,21 +149,48 @@ A mesma página fica online em
 1. **🔌 Conectar** e escolha o DSO152 (só ele aparece na lista). Nas próximas
    vezes a página conecta sozinha. Feche o `plot.py` antes, porque a porta só
    abre em um programa por vez.
-2. Ajuste V/div, t/div e AC/DC pela página ou pelos botões do aparelho. O
-   trigger, a posição e a ponta (1X/10X) são da página.
-3. Preencha o **título** e, se quiser, a **observação**.
-4. **📷 Salvar foto**: baixa um PNG de 1600×1040 com título, data, escalas,
-   eixos em volts e em tempo e a tabela de medidas (Vpp, Vmáx/Vmín, média, RMS,
-   frequência, período e ciclo ativo). O fundo branco é o melhor para impressão.
-5. **📋 Copiar imagem** põe a mesma foto na área de transferência: é só colar no
-   Word ou no Docs. **📄 Salvar CSV** exporta os dados (separador `;` e vírgula
-   decimal, abre direto no Excel).
+2. A página controla **tudo o que os botões controlam**, e o que você muda nos
+   botões aparece na página:
+   - **Vertical:** V/div, AC/DC, posição do 0 V e ponta 1X/10X.
+   - **Horizontal:** t/div (as mesmas bases da tela), taxa livre em amostras/s e
+     amostras por quadro (400 a 2048). Dá para mostrar o bloco inteiro em vez
+     das 12 divisões.
+   - **Trigger:** Auto, Normal ou Único, borda de subida ou descida, nível
+     (barra) e "Nível no meio".
+   - **Rodar/Parar**, **Único**, **Tudo no padrão** e **Calibrar zero** (a mesma
+     auto-calibração do RUN segurado; encoste a ponta no jacaré antes).
+3. **✨ Ajuste automático**: escolhe o V/div em que o sinal cabe, o t/div que
+   mostra uns 2,5 períodos e põe o trigger no meio.
+4. Análise:
+   - **Medidas**: frequência, período, Vpp, Vmáx/Vmín, amplitude, topo e base
+     (para quadradas), média, RMS, RMS AC, ciclo ativo, larguras + e −, subida e
+     descida 10–90 % e sobressinal. Com **Estatísticas**, mostra mínimo, média e
+     máximo desde a última mudança de escala.
+   - **📏 Cursores**: dois de tempo e dois de tensão, arrastáveis, com Δt, 1/Δt e
+     ΔV.
+   - **📊 Espectro (FFT)**: janela de Hann, fundamental, harmônicas em dBc e THD.
+     Use 2048 amostras para ter mais resolução.
+   - **Média** de 4 a 64 quadros alinhados pelo trigger (reduz o ruído),
+     **persistência** e **traço de referência** para comparar.
+5. Fotos para relatório: preencha o **título** e, se quiser, a **observação**.
+   - **📷 Salvar foto** baixa um PNG de 1600×1040 com título, data, escalas,
+     eixos, medidas e, se estiverem ligados, cursores e referência. O fundo
+     branco é o melhor para impressão.
+   - **📊 Espectro** salva a foto da FFT.
+   - **📋 Copiar** põe a foto na área de transferência, para colar no Word ou no
+     Docs.
+   - **📄 CSV** exporta os dados (separador `;` e vírgula decimal, abre direto no
+     Excel).
 
-Atalhos: `P` foto, `C` copiar, `Espaço` parar/rodar. As fotos da sessão ficam
-na lateral, e um clique baixa de novo. O botão **Demo** gera uma quadrada de
-teste sem precisar do aparelho. A escala de cada faixa vem embutida (medida
-em 2026-10-25); se você calibrar de novo, carregue o `pc/gain_cal.json` pelo
-link "Carregar gain_cal.json".
+Atalhos: `Espaço` rodar/parar, `S` único, `A` ajuste automático, `M` nível no
+meio, `P` foto, `C` copiar, `K` cursores, `F` espectro, `↑`/`↓` V/div e `←`/`→`
+t/div. O botão **Demo** simula o aparelho (quadrada, senoide, PWM ou
+triangular), com os mesmos comandos, sem precisar dele. A escala de cada faixa
+vem embutida (medida em 2026-10-25); se você calibrar de novo, carregue o
+`pc/gain_cal.json` pelo cartão "Aparelho".
+
+Com um firmware antigo (sem o quadro de estado), a página continua mostrando o
+sinal e mudando V/div, t/div e AC/DC, mas não acompanha os botões do aparelho.
 
 ## Plotter no PC
 
@@ -194,6 +221,27 @@ opções acima):
 | `R<hz>`  | 10..800000    | taxa de amostragem (padrão 50000)                   |
 | `N<n>`   | 16..2048      | amostras por frame (padrão 600)                     |
 | `C<0/1>` | 0 ou 1        | nível do PA3: 1 = DC, 0 = AC (medido)               |
+| `B<i>`   | 0..10         | base de tempo da tela: 50 µs/div .. 100 ms/div (padrão 3 = 500 µs) |
+| `T<m>`   | 0, 1, 2       | trigger AUTO, NORMAL, SINGLE                        |
+| `E<0/1>` | 0 ou 1        | borda de subida (0) ou de descida (1)               |
+| `L<px>`  | -200..200     | nível do trigger acima do 0 V, em px da tela (25 px por divisão) |
+| `P<px>`  | -200..200     | posição do 0 V acima do meio da tela, em px         |
+| `S<0/1>` | 0 ou 1        | parar / rodar (no SINGLE, `S1` arma de novo)        |
+| `A`      | —             | nível do trigger no meio do sinal (botão AUTO)       |
+| `D`      | —             | tudo no padrão (AUTO longo)                          |
+| `Z`      | —             | mede e grava os zeros das 11 faixas (ponta no jacaré) |
+| `Q`      | —             | pede o quadro de estado                              |
+
+Depois de cada comando, sempre que algo muda pelos botões e a cada segundo, o
+aparelho manda um **quadro de estado**: `A5 5B | len (u8) | payload | crc8`,
+com faixa, AC/DC, modo e borda do trigger, rodando/esperando, calibração,
+base de tempo, nível e posição (px), taxas pedida e real e amostras por
+quadro. O layout está em `status_poll()` em `src/main.c`. O `plot.py` só
+procura `A5 5A` e pula esse quadro.
+
+O tempo de amostragem do ADC é o maior que cabe na taxa: 239,5 ciclos até
+~42 kHz, 71,5 ciclos a 50–100 kHz e 1,5 ciclo só perto dos 800 kHz. Isso
+reduz o ruído nas taxas baixas.
 
 ## Auto-calibração do zero (no aparelho)
 

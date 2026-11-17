@@ -1,7 +1,10 @@
 /*
  * scope.c — aquisicao do DSO152, igual ao firmware original:
- *   - ADC1 no PA1 (canal 1, amostragem de 1,5 ciclo), disparado pelo evento
+ *   - ADC1 no PA1 (canal 1), disparado pelo evento
  *     TIM1_CC1 (PWM1, CCR1 = meio periodo, MOE ligado);
+ *     O original amostra sempre em 1,5 ciclo; aqui o tempo de amostragem e o
+ *     maior que cabe na taxa escolhida (239,5 ciclos ate ~42 kHz, 71,5 a
+ *     50 kHz, 1,5 ciclo so perto dos 800 kHz), o que reduz o ruido nas taxas baixas;
  *   - DMA1_Ch1 copia ADC1->DR para o buffer, n amostras por captura;
  *   - ganho pela GAIN_TABLE em PA2 (rele do atenuador) e PA4/PA5/PA6 (mux
  *     CD74HC4051); acoplamento AC/DC em PA3;
@@ -23,6 +26,28 @@ void delay_ms(uint32_t ms);
 static const uint8_t GAIN_PINS[4] = {2, 4, 5, 6};
 
 static uint16_t tim_psc, tim_arr;
+static uint8_t  adc_smp;           /* codigo SMP1 do canal 1 (0..7) */
+
+/*
+ * Tempo de amostragem do ADC (12 MHz) em meio-ciclos: 1,5 7,5 13,5 28,5 41,5
+ * 55,5 71,5 239,5. Cada conversao leva SMP + 12,5 ciclos. Um tempo maior deixa o
+ * capacitor de amostragem carregar melhor e reduz o ruido, mas a conversao tem
+ * de terminar antes do proximo gatilho do TIM1.
+ */
+static const uint16_t SMP_HALF_CYCLES[8] = {3, 15, 27, 57, 83, 111, 143, 479};
+#define ADC_CLK_HZ 12000000u
+
+/* maior tempo de amostragem cuja conversao cabe em 90 % do periodo da amostra */
+static uint8_t smp_for_rate(uint32_t hz)
+{
+    /* periodo da amostra em meio-ciclos do ADC, com 10 % de folga */
+    uint32_t budget = (2u * ADC_CLK_HZ / hz) * 9u / 10u;
+    uint8_t code = 0;
+    for (uint8_t k = 0; k < 8u; k++) {
+        if (SMP_HALF_CYCLES[k] + 25u <= budget) code = k;   /* +12,5 ciclos */
+    }
+    return code;
+}
 
 void scope_set_gain(unsigned idx)
 {
@@ -62,6 +87,7 @@ uint32_t scope_set_rate(uint32_t hz)
     uint32_t real = rate_timing(hz, &psc, &arr);
     tim_psc = (uint16_t)psc;
     tim_arr = (uint16_t)arr;
+    adc_smp = smp_for_rate(real);
     return real;
 }
 
@@ -93,7 +119,8 @@ void scope_init(void)
     TIM2->EGR   = TIM_EGR_UG;
     TIM2->CR1   = TIM_CR1_ARPE | TIM_CR1_CEN;
 
-    /* ADC1: 1 conversao (canal 1), 1,5 ciclo, calibra e liga o gatilho externo */
+    /* ADC1: 1 conversao (canal 1), calibra e liga o gatilho externo; o tempo de
+     * amostragem e ajustado pela taxa em scope_start() */
     ADC1->CR1   = 0u;
     ADC1->SMPR2 = 0u;
     ADC1->SQR1  = 0u;
@@ -125,6 +152,7 @@ void scope_start(uint16_t *dst, uint16_t n)
     TIM1->SR    = 0u;
     TIM1->CNT   = 0u;
 
+    ADC1->SMPR2 = (uint32_t)adc_smp << 3;   /* SMP1: tempo de amostragem do canal 1 */
     (void)ADC1->DR;                /* descarta conversao velha (limpa EOC) */
     DMA1->IFCR = DMA_IFCR_CH1;
     DMA1_Channel1->CPAR  = (uint32_t)&ADC1->DR;
